@@ -174,3 +174,23 @@ Include `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` a
 Never commit build artifacts (`build/`, `.build/`, `xcode-build/`), local model caches, recordings, or anything matching `.gitignore`. Re-run `git status` before staging to confirm.
 
 Only push when the user explicitly asks; commits accumulate locally otherwise.
+
+## Docs hygiene after each change
+
+After landing a coherent unit of work, check whether `README.md` and this
+`CLAUDE.md` still describe reality and update them when they don't. Diff-
+based minimal edits — don't rewrite, don't reorganize, just fix what's
+stale. Triggers worth thinking about:
+
+- Public API shape change (new method on `SummaryEngine` /
+  `EventExtractor`, renamed lifecycle hook in `AppModel`, new persistence
+  store, etc.)
+- New command, env var, or build step in `scripts/`
+- Architectural shift (e.g. transcription mode changes, new actor on the
+  hot path, new on-disk directory under Application Support)
+- Settings / config additions, removed dependencies, model defaults
+  flipping
+
+When skipping a doc update, that's a positive decision, not the default —
+sanity-check that the existing wording still matches the new behaviour
+before moving on.
