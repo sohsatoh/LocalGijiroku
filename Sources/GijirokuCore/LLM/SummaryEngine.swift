@@ -76,12 +76,26 @@ public actor SummaryEngine {
                 let bullets: [String]
             }
         }
-        let cleaned = stripJSONFences(response)
-        let wrapper = try JSONDecoder().decode(Wrapper.self, from: Data(cleaned.utf8))
+        let json = try extractJSONPayload(response)
+        let wrapper = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
         return CumulativeSummary(
             sections: wrapper.sections.map { .init(title: $0.title, bullets: $0.bullets) },
             lastUpdated: .now
         )
+    }
+
+    /// Normalizes a raw LLM response into a JSON object string.
+    /// Handles three common patterns:
+    ///   1. The response is already pure JSON.
+    ///   2. The JSON is wrapped in a markdown code fence (```json ... ```).
+    ///   3. The JSON is surrounded by prose ("Here is the summary: {...} Let me know if...").
+    /// Throws `LLMParseError.noJSONObject` if no balanced `{ ... }` pair is found.
+    static func extractJSONPayload(_ raw: String) throws -> String {
+        let unfenced = stripJSONFences(raw)
+        if let extracted = firstBalancedJSONObject(in: unfenced) {
+            return extracted
+        }
+        throw LLMParseError.noJSONObject
     }
 
     static func stripJSONFences(_ s: String) -> String {
@@ -96,6 +110,52 @@ public actor SummaryEngine {
         }
         return t
     }
+
+    /// Returns the substring spanning the first balanced `{...}` object,
+    /// respecting JSON string-escape rules so braces inside `"..."` don't
+    /// affect nesting depth. Returns nil if no such object exists.
+    static func firstBalancedJSONObject(in s: String) -> String? {
+        let chars = Array(s)
+        guard let start = chars.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escape = false
+        for i in start..<chars.count {
+            let c = chars[i]
+            if escape {
+                escape = false
+                continue
+            }
+            if inString {
+                if c == "\\" {
+                    escape = true
+                    continue
+                }
+                if c == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            switch c {
+            case "\"":
+                inString = true
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 {
+                    return String(chars[start...i])
+                }
+            default:
+                break
+            }
+        }
+        return nil
+    }
+}
+
+public enum LLMParseError: Error, Equatable {
+    case noJSONObject
 }
 
 enum SummaryPrompt {

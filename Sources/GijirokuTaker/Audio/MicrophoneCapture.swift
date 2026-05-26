@@ -5,7 +5,7 @@ import AudioToolbox
 import OSLog
 
 final class MicrophoneCapture {
-    typealias Sink = (AVAudioPCMBuffer) -> Void
+    typealias Sink = @Sendable (AVAudioPCMBuffer) -> Void
 
     private let logger = Logger(subsystem: "com.gijirokutaker.app", category: "MicrophoneCapture")
     private let engine = AVAudioEngine()
@@ -17,7 +17,11 @@ final class MicrophoneCapture {
         engine.inputNode.inputFormat(forBus: 0)
     }
 
-    func start(preferredDeviceUID: String? = nil, sink: @escaping Sink) throws {
+    func start(
+        preferredDeviceUID: String? = nil,
+        enableVoiceProcessing: Bool = true,
+        sink: @escaping Sink
+    ) throws {
         guard !isRunning else { return }
         self.sink = sink
 
@@ -31,6 +35,19 @@ final class MicrophoneCapture {
         }
 
         let node = engine.inputNode
+
+        // Enable AEC + noise suppression + AGC. Must be called *before*
+        // reading inputFormat / installTap, because flipping it changes the
+        // node's IO unit (and therefore the format) under the hood.
+        if enableVoiceProcessing {
+            do {
+                try node.setVoiceProcessingEnabled(true)
+                logger.info("Voice processing (AEC + NS + AGC) enabled")
+            } catch {
+                logger.error("Failed to enable voice processing: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
         let format = node.inputFormat(forBus: 0)
         logger.info("Mic input format: sampleRate=\(format.sampleRate, privacy: .public) ch=\(format.channelCount, privacy: .public)")
         node.installTap(onBus: 0, bufferSize: 4_096, format: format) { [weak self] buffer, _ in

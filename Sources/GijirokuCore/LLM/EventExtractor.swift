@@ -65,8 +65,8 @@ public actor EventExtractor {
                 let due: String?
             }
         }
-        let cleaned = SummaryEngine.stripJSONFences(response)
-        let wrapper = try JSONDecoder().decode(Wrapper.self, from: Data(cleaned.utf8))
+        let json = try SummaryEngine.extractJSONPayload(response)
+        let wrapper = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
         return wrapper.events.compactMap { dto in
             guard let kind = MeetingEvent.Kind(rawValue: dto.kind.lowercased()) else { return nil }
             return MeetingEvent(

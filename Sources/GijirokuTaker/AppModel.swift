@@ -13,6 +13,8 @@ final class AppModel: ObservableObject {
     @Published var summary: CumulativeSummary = CumulativeSummary()
     @Published var events: [MeetingEvent] = []
     @Published var statusMessage: String = "Idle"
+    @Published var micWaveform = WaveformChannelState()
+    @Published var systemWaveform = WaveformChannelState()
 
     private let settings: SettingsModel = .shared
     private let sessionStore: FileSessionStore
@@ -30,6 +32,9 @@ final class AppModel: ObservableObject {
 
     private var summaryLoopTask: Task<Void, Never>?
     private var audioPumpTask: Task<Void, Never>?
+    private var waveformTask: Task<Void, Never>?
+    private let transcriptDeduper = TranscriptDeduper()
+    private let eventMerger = EventMerger()
 
     var summaryModelDisplay: String {
         "\(settings.llmBackend.rawValue) / \(settings.activeLLMModelID)"
@@ -105,6 +110,8 @@ final class AppModel: ObservableObject {
         summaryLoopTask = nil
         audioPumpTask?.cancel()
         audioPumpTask = nil
+        waveformTask?.cancel()
+        waveformTask = nil
         Task { [captureEngine] in await captureEngine?.stop() }
         captureEngine = nil
         statusMessage = "Saving..."
@@ -112,9 +119,20 @@ final class AppModel: ObservableObject {
     }
 
     func append(segment: TranscriptSegment) {
-        transcript.append(segment)
-        // MVP: Whisper はまだ isFinal を区別していないので全部要約対象に積む。
-        pendingForSummary.append(segment)
+        let outcome = transcriptDeduper.merge(segment, into: &transcript)
+        switch outcome {
+        case .appended:
+            // 新規 → サマリ用にも積む
+            pendingForSummary.append(segment)
+        case .replaced(let previousID):
+            // 既存セグメントが上書きされた → サマリ用 buffer 内の同じ id を新しい text に更新
+            if let merged = transcript.first(where: { $0.id == previousID }),
+               let pIdx = pendingForSummary.firstIndex(where: { $0.id == previousID }) {
+                pendingForSummary[pIdx] = merged
+            }
+        case .ignored:
+            break
+        }
     }
 
     private func startSummaryLoop() {
@@ -148,8 +166,11 @@ final class AppModel: ObservableObject {
             async let eventsResult = eventExtractor.extract(from: segments)
             let (updatedSummary, newEvents) = try await (summaryResult, eventsResult)
             summary = updatedSummary
-            events.append(contentsOf: newEvents)
-            logger.info("flushSummaryWindow: sections=\(updatedSummary.sections.count, privacy: .public) events=\(newEvents.count, privacy: .public)")
+            let beforeCount = events.count
+            eventMerger.merge(newEvents, into: &events)
+            let added = events.count - beforeCount
+            let updated = newEvents.count - added
+            logger.info("flushSummaryWindow: sections=\(updatedSummary.sections.count, privacy: .public) events new=\(added, privacy: .public) updated=\(updated, privacy: .public)")
             statusMessage = "Recording..."
         } catch {
             logger.error("Summary error: \(error.localizedDescription, privacy: .public)")
@@ -162,7 +183,8 @@ final class AppModel: ObservableObject {
         let engine = AudioCaptureEngine(config: .init(
             captureSystem: settings.captureSystemAudio,
             captureMicrophone: settings.captureMicrophone,
-            preferredInputDeviceUID: preferredUID
+            preferredInputDeviceUID: preferredUID,
+            enableVoiceProcessing: settings.voiceProcessingEnabled
         ))
         captureEngine = engine
         guard let transcriber = transcriptionEngine else { return }
@@ -184,12 +206,38 @@ final class AppModel: ObservableObject {
                 self.logger.error("Capture error: \(error.localizedDescription, privacy: .public)")
             }
         }
+
+        waveformTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let waveStream = await engine.subscribeWaveform()
+            for await chunk in waveStream {
+                let rms = AppModel.computeRMS(chunk.samples)
+                switch chunk.source {
+                case .microphone:
+                    self.micWaveform.ingest(rms)
+                case .system:
+                    self.systemWaveform.ingest(rms)
+                }
+                if Task.isCancelled { break }
+            }
+        }
+    }
+
+    private static func computeRMS(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sumOfSquares: Float = 0
+        for sample in samples {
+            sumOfSquares += sample * sample
+        }
+        return (sumOfSquares / Float(samples.count)).squareRoot()
     }
 
     private func persistFinalSession() async {
         await flushSummaryWindow()
+        let projectID = LibraryModel.shared.activeProjectID
         let session = Session(
             id: sessionId,
+            projectId: projectID,
             title: defaultTitle(),
             startedAt: sessionStartedAt,
             endedAt: .now,
@@ -200,6 +248,7 @@ final class AppModel: ObservableObject {
         do {
             try sessionStore.save(session)
             statusMessage = "Saved \(session.id.uuidString.prefix(8))"
+            LibraryModel.shared.reload()
         } catch {
             statusMessage = "Save error: \(error.localizedDescription)"
         }

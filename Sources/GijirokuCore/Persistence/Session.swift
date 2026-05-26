@@ -2,6 +2,7 @@ import Foundation
 
 public struct Session: Codable, Sendable, Identifiable {
     public let id: UUID
+    public var projectId: UUID?
     public var title: String
     public var startedAt: Date
     public var endedAt: Date?
@@ -11,6 +12,7 @@ public struct Session: Codable, Sendable, Identifiable {
 
     public init(
         id: UUID = UUID(),
+        projectId: UUID? = nil,
         title: String = "Untitled",
         startedAt: Date = .now,
         endedAt: Date? = nil,
@@ -19,6 +21,7 @@ public struct Session: Codable, Sendable, Identifiable {
         events: [MeetingEvent] = []
     ) {
         self.id = id
+        self.projectId = projectId
         self.title = title
         self.startedAt = startedAt
         self.endedAt = endedAt

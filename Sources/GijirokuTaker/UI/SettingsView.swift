@@ -126,6 +126,7 @@ struct SettingsView: View {
         Form {
             Toggle("システム音声をキャプチャ", isOn: $settings.captureSystemAudio)
             Toggle("マイクをキャプチャ", isOn: $settings.captureMicrophone)
+            Toggle("エコーキャンセル (AEC + ノイズ抑制 + AGC)", isOn: $settings.voiceProcessingEnabled)
 
             HStack {
                 Picker("入力デバイス", selection: $settings.preferredInputDeviceUID) {
@@ -138,7 +139,10 @@ struct SettingsView: View {
                     .buttonStyle(.borderless)
             }
 
-            Text("システム音声タップは macOS 26 (Tahoe) で IO 不通の不具合あり。現在はマイク経由のキャプチャを推奨します（既知の制限、v2 で ScreenCaptureKit に置換予定）。")
+            Text("システム音声は ScreenCaptureKit 経由でキャプチャします。初回利用時に macOS が「画面録画」権限のプロンプトを出すので許可してください（映像は録画しません）。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("エコーキャンセルは Apple の VoiceProcessingIO を使い、スピーカー出力をリファレンスにマイク入力からエコーを除去します。スピーカー出力でビデオ会議をする場合に、相手の声が二重に文字起こしされるのを防ぐ標準対策です。ヘッドホン使用時は OFF でも問題ありません。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

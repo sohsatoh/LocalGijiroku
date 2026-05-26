@@ -3,10 +3,35 @@ import GijirokuCore
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var library: LibraryModel
+
+    var body: some View {
+        NavigationSplitView {
+            LibrarySidebar(library: library)
+        } detail: {
+            switch library.selection {
+            case .live:
+                RecordingView()
+            case .session(let id):
+                if let session = library.loadSession(id: id) {
+                    SessionDetailView(session: session)
+                } else {
+                    ContentUnavailableView("セッションが見つかりません", systemImage: "exclamationmark.triangle")
+                }
+            }
+        }
+    }
+}
+
+struct RecordingView: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var library: LibraryModel
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
+            Divider()
+            WaveformPanel(mic: model.micWaveform, system: model.systemWaveform)
             Divider()
             HSplitView {
                 TranscriptPane(segments: model.transcript)
@@ -17,6 +42,7 @@ struct RootView: View {
                     .frame(minWidth: 280)
             }
         }
+        .navigationTitle("録音中")
     }
 
     private var toolbar: some View {
@@ -29,10 +55,31 @@ struct RootView: View {
                 }
             }
             .keyboardShortcut("r", modifiers: [.command])
+
             Text(model.statusMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
             Spacer()
+
+            HStack(spacing: 6) {
+                Text("保存先:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("保存先", selection: Binding(
+                    get: { library.activeProjectID },
+                    set: { library.activeProjectID = $0 }
+                )) {
+                    Text("（未分類）").tag(UUID?.none)
+                    ForEach(library.projects) { project in
+                        Text(project.name).tag(UUID?.some(project.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+                .disabled(model.isRecording)
+            }
+
             Text(model.summaryModelDisplay)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -53,7 +100,7 @@ struct TranscriptPane: View {
                             Text(icon(for: seg.source))
                             Text(seg.text)
                                 .textSelection(.enabled)
-                                .opacity(seg.isFinal ? 1.0 : 0.6)
+                                .opacity(seg.isFinal ? 1.0 : 0.85)
                             Spacer()
                         }
                         .id(seg.id)

@@ -17,6 +17,7 @@ final class SettingsModel: ObservableObject {
         static let captureMicrophone = "captureMicrophone"
         static let preferredInputDeviceUID = "preferredInputDeviceUID"
         static let ollamaBaseURL = "ollamaBaseURL"
+        static let voiceProcessing = "voiceProcessing"
     }
 
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
@@ -25,13 +26,17 @@ final class SettingsModel: ObservableObject {
     @AppStorage(Keys.mlxModelID) var mlxModelID: String = "mlx-community/Qwen3-4B-4bit"
     @AppStorage(Keys.ollamaModelID) var ollamaModelID: String = "qwen2.5:7b"
     @AppStorage(Keys.summaryUpdateInterval) var summaryUpdateInterval: Double = 30
-    // macOS 26 Tahoe では Core Audio Taps の IO callback が初回 1 frame で止まる
-    // 不具合を確認しているため、デフォルトを OFF にしてマイク経路で動かす。
-    // ScreenCaptureKit ベースの代替を将来実装する。
-    @AppStorage(Keys.captureSystemAudio) var captureSystemAudio: Bool = false
+    // ScreenCaptureKit ベースに切替済み (Core Audio Taps は macOS 26 Tahoe で動かないため廃止)。
+    // 初回利用時に「画面録画」権限プロンプトが出る。
+    @AppStorage(Keys.captureSystemAudio) var captureSystemAudio: Bool = true
     @AppStorage(Keys.captureMicrophone) var captureMicrophone: Bool = true
     @AppStorage(Keys.preferredInputDeviceUID) var preferredInputDeviceUID: String = ""
     @AppStorage(Keys.ollamaBaseURL) var ollamaBaseURL: String = "http://127.0.0.1:11434"
+    // Apple の VoiceProcessingIO を有効化すると、システム出力（スピーカー側の信号）
+    // をリファレンスにマイク入力からエコーをキャンセルする。ヘッドホンでない会議で
+    // 「スピーカーから出た相手の声」がマイクに回り込んで二重 transcript される
+    // 問題の標準的な対策。副作用としてノイズ抑制と自動ゲイン制御も入る。
+    @AppStorage(Keys.voiceProcessing) var voiceProcessingEnabled: Bool = true
 
     var llmBackend: LLMBackend {
         get { LLMBackend(rawValue: llmBackendRaw) ?? .mlx }

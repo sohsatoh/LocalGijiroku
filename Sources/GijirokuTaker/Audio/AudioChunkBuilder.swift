@@ -5,7 +5,11 @@ import GijirokuCore
 
 // Resamples device-native audio (any rate, any channel count) into 16kHz mono
 // Float32, then emits fixed-duration AudioChunk values for the given source.
-final class AudioChunkBuilder {
+//
+// Thread-safe: internal mutation is guarded by `lock`. Marked
+// `@unchecked Sendable` so it can be captured by audio-IO closures running on
+// background queues from actor-isolated callers.
+final class AudioChunkBuilder: @unchecked Sendable {
     private let logger: Logger
     private let source: AudioSource
     private let targetSampleRate: Double

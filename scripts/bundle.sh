@@ -51,6 +51,9 @@ rm -rf "${APP_PATH}"
 mkdir -p "${CONTENTS}/MacOS" "${CONTENTS}/Resources"
 cp "${BIN}" "${CONTENTS}/MacOS/${APP_NAME}"
 cp "${ROOT}/Resources/Info.plist" "${CONTENTS}/Info.plist"
+if [ -f "${ROOT}/Resources/AppIcon.icns" ]; then
+    cp "${ROOT}/Resources/AppIcon.icns" "${CONTENTS}/Resources/AppIcon.icns"
+fi
 printf 'APPL????' > "${CONTENTS}/PkgInfo"
 
 # Copy every SwiftPM resource bundle next to the binary so that MLX's

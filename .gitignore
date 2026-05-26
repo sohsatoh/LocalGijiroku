@@ -21,3 +21,4 @@ Models/
 # Local config
 .env
 .env.local
+default.profraw
