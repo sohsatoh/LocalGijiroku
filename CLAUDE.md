@@ -130,7 +130,7 @@ The **rows** layout (default, matching the 9bb0828 behaviour) renders one boxed 
 
 The opt-in **speaker turns** layout groups segments into Notion-style speaker-turn prose blocks via `TranscriptTurnGrouping.turns(...)`. Each turn exposes `paragraphs` — segments split at sentence terminators (。．！？!?.) and joined with `smartConcat` (CJK runs concatenate directly; ASCII word boundaries get a single space). The block has no card chrome — a header line (speaker dot + name + source icon + time) sits above flowing prose, and the rolling tail flows inline as italicized secondary-color text at the end of the last paragraph.
 
-Both layouts honour the user's `transcriptFontSize` setting (range 10–22 pt, default 13), applied to the body Text views.
+Both layouts honour the user's `paneFontSize` setting (range 10–22 pt, default 13). The same value drives the transcript body, summary section bullets, and event card text so the three panes scale together — the `@AppStorage` key string is kept as `transcriptFontSize` for migration compatibility with users who set it before the setting broadened.
 
 The Codable decoder defaults `isConfirmed` to `true` when missing, so sessions saved by older builds load as fully-confirmed transcripts.
 

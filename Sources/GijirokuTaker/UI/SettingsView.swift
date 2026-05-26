@@ -75,16 +75,20 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
 
             HStack {
-                Text(loc: "settings.transcript_font_size")
+                Text(loc: "settings.font_size")
                 // Range 10–22 pt covers everything from "comfortable
                 // glance" to "presentation mode". Stepper-style slider
-                // keeps integer pt values predictable.
-                Slider(value: $settings.transcriptFontSize, in: 10...22, step: 1)
-                Text(L10n.format("settings.transcript_font_size.value_format", settings.transcriptFontSize))
+                // keeps integer pt values predictable. Applied to the
+                // transcript / summary / events panes uniformly.
+                Slider(value: $settings.paneFontSize, in: 10...22, step: 1)
+                Text(L10n.format("settings.font_size.value_format", settings.paneFontSize))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(width: 48, alignment: .trailing)
             }
+            Text(loc: "settings.font_size.caption")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

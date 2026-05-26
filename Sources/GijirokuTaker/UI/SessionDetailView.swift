@@ -39,12 +39,12 @@ struct SessionDetailView: View {
                         // speaker label, the session was diarized.
                         showDiarizationPlaceholder: session.transcript.contains { $0.speaker != nil },
                         layoutMode: settings.transcriptLayoutMode,
-                        fontSize: CGFloat(settings.transcriptFontSize)
+                        fontSize: CGFloat(settings.paneFontSize)
                     )
                         .frame(minWidth: 280, idealWidth: 360)
-                    SummaryPane(summary: session.summary)
+                    SummaryPane(summary: session.summary, fontSize: CGFloat(settings.paneFontSize))
                         .frame(minWidth: 280, idealWidth: 360)
-                    EventPane(events: session.events)
+                    EventPane(events: session.events, fontSize: CGFloat(settings.paneFontSize))
                         .frame(minWidth: 240, idealWidth: 280)
                 }
             } else {

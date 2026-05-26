@@ -92,8 +92,9 @@
 "settings.transcript_layout.rows" = "Per-segment rows (default)";
 "settings.transcript_layout.turns" = "Speaker turns (Notion-style)";
 "settings.transcript_layout.caption" = "Notion-style collapses consecutive speech into one block and renders the unconfirmed rolling tail inline.";
-"settings.transcript_font_size" = "Transcript font size";
-"settings.transcript_font_size.value_format" = "%.0f pt";
+"settings.font_size" = "Font size";
+"settings.font_size.value_format" = "%.0f pt";
+"settings.font_size.caption" = "Applied to transcript, summary, and tasks.";
 
 /* === Settings: LLM === */
 "settings.backend" = "Backend";

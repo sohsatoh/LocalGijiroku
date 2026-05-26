@@ -43,13 +43,14 @@ enum EventKindStyle {
 /// text, and (when present) owner / due-date metadata as small pills below.
 struct EventCard: View {
     let event: MeetingEvent
+    var fontSize: CGFloat = 13
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             kindBadge
             VStack(alignment: .leading, spacing: 6) {
                 Text(event.text)
-                    .font(.body)
+                    .font(.system(size: fontSize))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     // Resolved events stay in the list but are visually
@@ -67,7 +68,10 @@ struct EventCard: View {
                             .font(.caption2)
                             .foregroundStyle(EventKindStyle.tint(event.kind).opacity(0.7))
                         Text(resolution)
-                            .font(.callout)
+                            // Resolution reads as a sub-detail of the main
+                            // event line; render at fontSize - 1 to keep
+                            // the visual hierarchy clear at any chosen base.
+                            .font(.system(size: max(10, fontSize - 1)))
                             .textSelection(.enabled)
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)

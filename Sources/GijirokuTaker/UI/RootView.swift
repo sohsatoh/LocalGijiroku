@@ -88,12 +88,12 @@ struct RecordingView: View {
                     liveTail: model.liveTail,
                     showDiarizationPlaceholder: model.diarizationEnabled,
                     layoutMode: settings.transcriptLayoutMode,
-                    fontSize: CGFloat(settings.transcriptFontSize)
+                    fontSize: CGFloat(settings.paneFontSize)
                 )
                     .frame(minWidth: 280, idealWidth: 360)
-                SummaryPane(summary: model.summary)
+                SummaryPane(summary: model.summary, fontSize: CGFloat(settings.paneFontSize))
                     .frame(minWidth: 280, idealWidth: 360)
-                EventPane(events: model.events)
+                EventPane(events: model.events, fontSize: CGFloat(settings.paneFontSize))
                     .frame(minWidth: 240, idealWidth: 280)
             }
         }
@@ -492,6 +492,7 @@ private struct TranscriptTurnBlock: View {
 
 struct SummaryPane: View {
     let summary: CumulativeSummary
+    var fontSize: CGFloat = 13
     @ObservedObject private var settings = SettingsModel.shared
 
     var body: some View {
@@ -508,7 +509,7 @@ struct SummaryPane: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(summary.sections) { section in
-                            SummarySectionCard(section: section)
+                            SummarySectionCard(section: section, fontSize: fontSize)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -521,11 +522,15 @@ struct SummaryPane: View {
 
 private struct SummarySectionCard: View {
     let section: CumulativeSummary.Section
+    let fontSize: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(section.title)
-                .font(.subheadline.weight(.semibold))
+                // Header sits one point above the body so the visual
+                // hierarchy stays intact regardless of the user's chosen
+                // base size.
+                .font(.system(size: fontSize + 1, weight: .semibold))
                 .foregroundStyle(.primary)
             ForEach(Array(section.bullets.enumerated()), id: \.offset) { _, bullet in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -534,7 +539,7 @@ private struct SummarySectionCard: View {
                         .foregroundStyle(.tertiary)
                         .padding(.top, 5)
                     Text(bullet)
-                        .font(.callout)
+                        .font(.system(size: fontSize))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -552,6 +557,7 @@ private struct SummarySectionCard: View {
 
 struct EventPane: View {
     let events: [MeetingEvent]
+    var fontSize: CGFloat = 13
     @ObservedObject private var settings = SettingsModel.shared
 
     var body: some View {
@@ -573,7 +579,7 @@ struct EventPane: View {
                                 VStack(alignment: .leading, spacing: 6) {
                                     eventGroupHeader(kind: kind, count: group.count)
                                     ForEach(group) { event in
-                                        EventCard(event: event)
+                                        EventCard(event: event, fontSize: fontSize)
                                     }
                                 }
                             }

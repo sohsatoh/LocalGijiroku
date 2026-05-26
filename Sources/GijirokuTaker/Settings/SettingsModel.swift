@@ -78,9 +78,11 @@ final class SettingsModel: ObservableObject {
     /// Default is rows because that's what longtime users expect and what
     /// reviewers found readable in earlier feedback.
     @AppStorage(Keys.transcriptDisplayMode) var transcriptDisplayMode: String = TranscriptLayoutMode.rows.rawValue
-    /// Body font size for the transcript pane, in points. Applied to both
-    /// the rows and turns layouts. Range clamped via the Settings slider.
-    @AppStorage(Keys.transcriptFontSize) var transcriptFontSize: Double = 13
+    /// Body font size shared across the transcript, summary, and events
+    /// panes, in points. Stored under the historical `transcriptFontSize`
+    /// key so a user who set it before this setting broadened to all
+    /// panes keeps their value. Range clamped via the Settings slider.
+    @AppStorage(Keys.transcriptFontSize) var paneFontSize: Double = 13
 
     var userSummaryStyle: SummaryStyle {
         guard !userSummaryStyleJSON.isEmpty,

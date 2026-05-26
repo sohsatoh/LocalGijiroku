@@ -92,8 +92,9 @@
 "settings.transcript_layout.rows" = "行ごとに表示 (既定)";
 "settings.transcript_layout.turns" = "話者ターン (Notion 風)";
 "settings.transcript_layout.caption" = "Notion 風は連続発話を 1 ブロックにまとめ、未確定の rolling tail をインライン表示します。";
-"settings.transcript_font_size" = "字幕の文字サイズ";
-"settings.transcript_font_size.value_format" = "%.0f pt";
+"settings.font_size" = "文字サイズ";
+"settings.font_size.value_format" = "%.0f pt";
+"settings.font_size.caption" = "字幕・サマリ・タスクのすべてに適用されます。";
 
 /* === Settings: LLM === */
 "settings.backend" = "バックエンド";
