@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Communication
+
+必ず日本語で返答すること。コミット・PR 説明・コードコメントは英語のまま既存スタイルを踏襲する。
+
 ## What this is
 
 macOS SwiftUI app that records meetings, transcribes them with WhisperKit on-device, and produces rolling LLM summaries + extracted decisions/actions/questions with MLX (or Ollama as a backend alternative). Everything runs locally; nothing leaves the device.
