@@ -170,6 +170,7 @@
 "progress.summarizing_format" = "Summarizing (%d segments)";
 "progress.extracting_events_format" = "Extracting events (%d segments)";
 "progress.generating_title" = "Generating title…";
+"progress.classifying_project" = "Classifying project…";
 "progress.done_format" = "Done %@ (sections=%d, events=%d)";
 "progress.failed_format" = "Error: %@";
 

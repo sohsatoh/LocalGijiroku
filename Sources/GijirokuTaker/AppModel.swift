@@ -577,7 +577,15 @@ final class AppModel: ObservableObject {
         }
         summaryProgress = .generatingTitle
         let title = await generateTitle(transcript: finalTranscript)
-        let projectID = LibraryModel.shared.activeProjectID
+        // Honor the user's explicit pre-selection. Only auto-classify when
+        // the user hadn't already filed the recording under a project.
+        let preselectedID = LibraryModel.shared.activeProjectID
+        let projectID: UUID?
+        if let preselectedID {
+            projectID = preselectedID
+        } else {
+            projectID = await classifyIntoExistingProject(title: title)
+        }
         let session = Session(
             id: sessionId,
             projectId: projectID,
@@ -621,6 +629,50 @@ final class AppModel: ObservableObject {
         summary = CumulativeSummary()
         events.removeAll()
         pendingForSummary.removeAll()
+    }
+
+    /// Picks the best-matching existing project for the just-recorded
+    /// session. Returns `nil` (i.e. leave the session unfiled) when there
+    /// are no candidate projects, when the summary is empty, when the LLM
+    /// returns "none", or on any error — auto-classification is best-effort
+    /// and must not break the save path.
+    private func classifyIntoExistingProject(title: String) async -> UUID? {
+        let projects = LibraryModel.shared.projects
+        guard !projects.isEmpty else { return nil }
+        guard !summary.sections.isEmpty else { return nil }
+        guard let client else { return nil }
+
+        summaryProgress = .classifyingProject
+        let candidates = projects.map { p in
+            ProjectClassifier.Candidate(id: p.id, name: p.name, note: p.note)
+        }
+        let language: String = {
+            switch effectiveLanguage {
+            case "ja": return "Japanese"
+            case "en": return "English"
+            default: return "auto"
+            }
+        }()
+        let classifier = ProjectClassifier(
+            client: client,
+            config: .init(model: settings.activeLLMModelID, language: language)
+        )
+        do {
+            let chosen = try await classifier.classify(
+                summary: summary,
+                title: title,
+                candidates: candidates
+            )
+            if let chosen, let match = projects.first(where: { $0.id == chosen }) {
+                fputs("[GijirokuTaker] auto-classified into project=\(match.name)\n", stderr)
+            } else {
+                fputs("[GijirokuTaker] auto-classify: no matching project, leaving unfiled\n", stderr)
+            }
+            return chosen
+        } catch {
+            logger.error("ProjectClassifier failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// Generates a short meeting title via the LLM and prefixes it with the
