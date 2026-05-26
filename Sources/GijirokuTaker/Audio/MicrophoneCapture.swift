@@ -19,7 +19,6 @@ final class MicrophoneCapture {
 
     func start(
         preferredDeviceUID: String? = nil,
-        enableVoiceProcessing: Bool = true,
         sink: @escaping Sink
     ) throws {
         guard !isRunning else { return }
@@ -36,32 +35,10 @@ final class MicrophoneCapture {
 
         let node = engine.inputNode
 
-        // Enable AEC + noise suppression + AGC. Must be called *before*
-        // reading inputFormat / installTap, because flipping it changes the
-        // node's IO unit (and therefore the format) under the hood.
-        //
-        // VoiceProcessingIO defaults to ducking other audio (so the user's
-        // own speech is more intelligible to the far side of a call). That's
-        // not what we want here — we're a passive recorder, and the user just
-        // sees the meeting speaker getting quieter when they hit Start.
-        // macOS 14+ lets us dial the ducking down to the minimum.
-        if enableVoiceProcessing {
-            do {
-                try node.setVoiceProcessingEnabled(true)
-                if #available(macOS 14.0, *) {
-                    let config = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
-                        enableAdvancedDucking: false,
-                        duckingLevel: .min
-                    )
-                    node.voiceProcessingOtherAudioDuckingConfiguration = config
-                    logger.info("Voice processing (AEC + NS + AGC) enabled, ducking=min")
-                } else {
-                    logger.info("Voice processing (AEC + NS + AGC) enabled (legacy ducking)")
-                }
-            } catch {
-                logger.error("Failed to enable voice processing: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        // Apple の VoiceProcessingIO は副作用として speaker output を ducking
+        // するため、本アプリでは使用しない。スピーカー音がマイクに回り込む
+        // 「bleed」問題は TranscriptDeduper のクロスソース dedup で解決する
+        // (詳細はそちらのコメント参照)。
 
         let format = node.inputFormat(forBus: 0)
         logger.info("Mic input format: sampleRate=\(format.sampleRate, privacy: .public) ch=\(format.channelCount, privacy: .public)")

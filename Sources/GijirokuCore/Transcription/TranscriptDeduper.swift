@@ -26,15 +26,31 @@ public struct TranscriptDeduper {
         /// existing entry are eligible for merging. Prevents accidental merges
         /// like "今日" and a much later "今日は雨だ".
         public var maxStartTimeDelta: TimeInterval
+        /// When true, a microphone segment whose text matches a recent system
+        /// audio segment (within `crossSourceTimeDelta`) is treated as speaker
+        /// bleed and suppressed. This is what we use instead of Apple's
+        /// VoiceProcessingIO — the audio path stays untouched (no ducking, no
+        /// AGC artifacts) and the duplicate transcription is dropped at the
+        /// transcript layer.
+        public var crossSourceBleedSuppression: Bool
+        /// Time window for the cross-source match. Bleed lag (acoustic +
+        /// buffering) is well under 1s, but rolling-window Whisper output can
+        /// shift segment timestamps by a few seconds, so we accept a wider
+        /// window than maxStartTimeDelta is intended for.
+        public var crossSourceTimeDelta: TimeInterval
 
         public init(
             lookbackWindow: Int = 8,
             similarityThreshold: Float = 0.7,
-            maxStartTimeDelta: TimeInterval = 12
+            maxStartTimeDelta: TimeInterval = 12,
+            crossSourceBleedSuppression: Bool = true,
+            crossSourceTimeDelta: TimeInterval = 6
         ) {
             self.lookbackWindow = lookbackWindow
             self.similarityThreshold = similarityThreshold
             self.maxStartTimeDelta = maxStartTimeDelta
+            self.crossSourceBleedSuppression = crossSourceBleedSuppression
+            self.crossSourceTimeDelta = crossSourceTimeDelta
         }
     }
 
@@ -47,6 +63,10 @@ public struct TranscriptDeduper {
     /// Merges `incoming` into `transcript`, in place. Returns the outcome so
     /// callers can keep secondary buffers (pending-for-summary etc.) in sync.
     public func merge(_ incoming: TranscriptSegment, into transcript: inout [TranscriptSegment]) -> MergeOutcome {
+        if config.crossSourceBleedSuppression,
+           let crossOutcome = mergeAcrossSources(incoming, into: &transcript) {
+            return crossOutcome
+        }
         let recent = transcript.suffix(config.lookbackWindow)
         for existing in recent.reversed() {
             guard existing.source == incoming.source else { continue }
@@ -78,6 +98,44 @@ public struct TranscriptDeduper {
         }
         transcript.append(incoming)
         return .appended
+    }
+
+    /// Cross-source bleed handler: if `incoming` (mic) has similar text to a
+    /// recent system segment, treat it as speaker bleed and drop it. If the
+    /// inverse arrives — system audio matching a mic segment we already kept —
+    /// upgrade the existing entry to source=.system so summaries get the
+    /// cleaner version. Returns nil to fall through to the same-source path.
+    private func mergeAcrossSources(_ incoming: TranscriptSegment, into transcript: inout [TranscriptSegment]) -> MergeOutcome? {
+        let recent = transcript.suffix(config.lookbackWindow)
+        for existing in recent.reversed() {
+            guard existing.source != incoming.source else { continue }
+            let timeDelta = abs(existing.startTime.timeIntervalSince(incoming.startTime))
+            guard timeDelta <= config.crossSourceTimeDelta else { continue }
+            let sim = Self.similarity(existing.text, incoming.text)
+            guard sim >= config.similarityThreshold else { continue }
+            if incoming.source == .microphone, existing.source == .system {
+                // System already has the clean version — drop the mic bleed.
+                return .ignored
+            }
+            if incoming.source == .system, existing.source == .microphone {
+                // The mic captured the bleed first; replace it with the system
+                // version. Preserve the original UUID so AppModel's pending-
+                // for-summary buffer can update by id.
+                guard let idx = transcript.lastIndex(where: { $0.id == existing.id }) else { continue }
+                transcript[idx] = TranscriptSegment(
+                    id: existing.id,
+                    source: .system,
+                    speaker: incoming.speaker,
+                    text: incoming.text,
+                    startTime: min(existing.startTime, incoming.startTime),
+                    endTime: max(existing.endTime, incoming.endTime),
+                    isFinal: incoming.isFinal || existing.isFinal,
+                    confidence: incoming.confidence
+                )
+                return .replaced(previousID: existing.id)
+            }
+        }
+        return nil
     }
 
     /// Token-set Jaccard similarity tuned for short Whisper segments.

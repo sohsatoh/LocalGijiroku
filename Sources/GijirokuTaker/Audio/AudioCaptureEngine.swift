@@ -11,22 +11,19 @@ public actor AudioCaptureEngine {
         public let captureSystem: Bool
         public let captureMicrophone: Bool
         public let preferredInputDeviceUID: String?
-        public let enableVoiceProcessing: Bool
 
         public init(
             chunkDuration: TimeInterval = 1.0,
             targetSampleRate: Double = 16_000,
             captureSystem: Bool = true,
             captureMicrophone: Bool = true,
-            preferredInputDeviceUID: String? = nil,
-            enableVoiceProcessing: Bool = true
+            preferredInputDeviceUID: String? = nil
         ) {
             self.chunkDuration = chunkDuration
             self.targetSampleRate = targetSampleRate
             self.captureSystem = captureSystem
             self.captureMicrophone = captureMicrophone
             self.preferredInputDeviceUID = preferredInputDeviceUID
-            self.enableVoiceProcessing = enableVoiceProcessing
         }
     }
 
@@ -90,10 +87,7 @@ public actor AudioCaptureEngine {
                 onChunk: multicast
             )
             do {
-                try mic.start(
-                    preferredDeviceUID: config.preferredInputDeviceUID,
-                    enableVoiceProcessing: config.enableVoiceProcessing
-                ) { buffer in
+                try mic.start(preferredDeviceUID: config.preferredInputDeviceUID) { buffer in
                     builder.ingest(buffer)
                 }
                 micBuilder = builder

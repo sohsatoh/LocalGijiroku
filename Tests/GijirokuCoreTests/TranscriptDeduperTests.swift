@@ -44,11 +44,65 @@ private func segment(_ text: String, source: AudioSource = .microphone, start: T
     if case .replaced = outcome {} else { Issue.record("expected .replaced, got \(outcome)") }
 }
 
-@Test func differentSourcesAreNeverMerged() {
-    let dedup = TranscriptDeduper()
+@Test func differentSourcesAreKeptWhenBleedSuppressionDisabled() {
+    let dedup = TranscriptDeduper(config: .init(crossSourceBleedSuppression: false))
     var list: [TranscriptSegment] = []
     _ = dedup.merge(segment("hello world", source: .microphone), into: &list)
     let outcome = dedup.merge(segment("hello world", source: .system), into: &list)
+    #expect(outcome == .appended)
+    #expect(list.count == 2)
+}
+
+@Test func micBleedIsDroppedWhenSystemAlreadyHasIt() {
+    let dedup = TranscriptDeduper()
+    var list: [TranscriptSegment] = []
+    _ = dedup.merge(segment("今日の議題はリリース計画です", source: .system, start: 0), into: &list)
+    // Microphone picked up the same audio bleeding through the speaker, a
+    // beat later — should be suppressed.
+    let outcome = dedup.merge(segment("今日の議題はリリース計画です", source: .microphone, start: 0.4), into: &list)
+    #expect(outcome == .ignored)
+    #expect(list.count == 1)
+    #expect(list[0].source == .system)
+}
+
+@Test func systemAudioUpgradesPriorMicBleed() {
+    // Edge case: mic transcribed the bleed first (mic stream had less buffer
+    // lag this round), then the cleaner system version arrives. The mic
+    // entry should be replaced with the system version, preserving its UUID
+    // so AppModel's pending-for-summary buffer stays in sync.
+    let dedup = TranscriptDeduper()
+    var list: [TranscriptSegment] = []
+    let micID = UUID()
+    _ = dedup.merge(segment("プロジェクトを来週ローンチします", source: .microphone, start: 0, id: micID), into: &list)
+    let outcome = dedup.merge(segment("プロジェクトを来週ローンチします", source: .system, start: 0.2), into: &list)
+    if case .replaced(let previousID) = outcome {
+        #expect(previousID == micID)
+    } else {
+        Issue.record("expected .replaced, got \(outcome)")
+    }
+    #expect(list.count == 1)
+    #expect(list[0].id == micID)
+    #expect(list[0].source == .system)
+}
+
+@Test func crossSourceMatchRequiresTimeProximity() {
+    let dedup = TranscriptDeduper()
+    var list: [TranscriptSegment] = []
+    _ = dedup.merge(segment("hello world", source: .system, start: 0), into: &list)
+    // Mic says the same words 30s later — completely unrelated to the
+    // earlier system audio, must NOT be suppressed.
+    let outcome = dedup.merge(segment("hello world", source: .microphone, start: 30), into: &list)
+    #expect(outcome == .appended)
+    #expect(list.count == 2)
+}
+
+@Test func crossSourceDoesNotSuppressUnrelatedMicText() {
+    // The user is speaking their own thing while system audio is playing
+    // something else. Different text → both kept.
+    let dedup = TranscriptDeduper()
+    var list: [TranscriptSegment] = []
+    _ = dedup.merge(segment("メールの返信を後で送ります", source: .system, start: 0), into: &list)
+    let outcome = dedup.merge(segment("私の意見ではこれは進めるべきです", source: .microphone, start: 0.3), into: &list)
     #expect(outcome == .appended)
     #expect(list.count == 2)
 }

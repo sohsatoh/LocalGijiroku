@@ -14,19 +14,34 @@ public actor WhisperTranscription: TranscriptionEngine {
         public let windowSeconds: TimeInterval
         public let inferenceInterval: TimeInterval
         public let diarizationEnabled: Bool
+        /// When true, hand WhisperKit an EnergyVAD so it splits each 25 s
+        /// rolling window into voiced sub-regions before transcribing. This
+        /// produces segment boundaries that land on natural pauses instead
+        /// of mid-utterance — the main complaint about Whisper's default
+        /// chunking for meeting use.
+        public let vadEnabled: Bool
+        /// Energy threshold for the VAD (0 = always voiced, 1 = never).
+        /// WhisperKit's default is 0.02. Quiet meeting audio sometimes needs
+        /// a lower value (e.g. 0.01) to catch soft speech; noisy mic input
+        /// benefits from a higher value to filter background hiss.
+        public let vadEnergyThreshold: Float
 
         public init(
             modelName: String = "large-v3-v20240930_626MB",
             language: String = "ja",
             windowSeconds: TimeInterval = 25,
             inferenceInterval: TimeInterval = 5,
-            diarizationEnabled: Bool = false
+            diarizationEnabled: Bool = false,
+            vadEnabled: Bool = true,
+            vadEnergyThreshold: Float = 0.02
         ) {
             self.modelName = modelName
             self.language = language
             self.windowSeconds = windowSeconds
             self.inferenceInterval = inferenceInterval
             self.diarizationEnabled = diarizationEnabled
+            self.vadEnabled = vadEnabled
+            self.vadEnergyThreshold = vadEnergyThreshold
         }
     }
 
@@ -104,8 +119,23 @@ public actor WhisperTranscription: TranscriptionEngine {
     private func ensureLoaded() async throws -> WhisperKit {
         if let whisper { return whisper }
         logger.info("Loading WhisperKit model=\(self.config.modelName, privacy: .public) (downloads on first use)...")
-        let kit = try await WhisperKit(WhisperKitConfig(model: config.modelName))
+        // Hand WhisperKit an EnergyVAD when enabled so it can pre-segment the
+        // rolling audio window by silence — yields segment boundaries that
+        // align with speech pauses instead of Whisper's internal token
+        // heuristics. EnergyVAD is cheap and configured via energyThreshold.
+        let vad: VoiceActivityDetector? = config.vadEnabled
+            ? EnergyVAD(energyThreshold: config.vadEnergyThreshold)
+            : nil
+        let kit = try await WhisperKit(WhisperKitConfig(
+            model: config.modelName,
+            voiceActivityDetector: vad
+        ))
         whisper = kit
+        if config.vadEnabled {
+            fputs("[WhisperTranscription] VAD enabled (energyThreshold=\(config.vadEnergyThreshold))\n", stderr)
+        } else {
+            fputs("[WhisperTranscription] VAD disabled\n", stderr)
+        }
         logger.info("WhisperKit loaded.")
         return kit
     }
