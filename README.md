@@ -66,7 +66,7 @@ The first time you select an MLX model, ~2–5 GB will download from HuggingFace
 ## Tests
 
 ```bash
-swift test                                       # ~134 hermetic unit tests
+swift test                                       # ~141 hermetic unit tests
 RUN_OLLAMA_TESTS=1 swift test --filter ollama    # live Ollama integration
 .build/debug/GijirokuCLI /path/to/audio.wav      # headless E2E from a WAV
 ```

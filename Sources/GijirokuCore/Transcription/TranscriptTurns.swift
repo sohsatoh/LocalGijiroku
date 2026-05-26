@@ -37,14 +37,72 @@ public struct TranscriptTurn: Identifiable, Sendable, Equatable {
         self.liveTail = liveTail
     }
 
-    /// Concatenated confirmed text for the turn. Falls back to a single
-    /// space between segments — Whisper's segment splits aren't sentence
-    /// boundaries, just decoder chunking, so joining with a space reads
-    /// naturally.
+    /// Concatenated confirmed text for the turn, joined with the same
+    /// smart concat the UI uses for paragraphs (ASCII word boundary →
+    /// space, CJK boundary → no separator). Used for plain-text exports
+    /// and tests; the live UI consumes `paragraphs` instead.
     public var text: String {
-        segments
-            .map { $0.text }
-            .joined(separator: " ")
+        TranscriptTurn.smartConcat(segments.map { $0.text })
+    }
+
+    /// Split the confirmed segment run into paragraphs at sentence-ending
+    /// punctuation (。!?.！？), so the UI can render multiple paragraphs
+    /// inside a single speaker turn instead of one wall of text.
+    ///
+    /// Why on `TranscriptTurn` rather than the view: this is data shape,
+    /// not styling — the headless CLI runner and tests want the same
+    /// segmentation, and it lets the view stay declarative.
+    public var paragraphs: [String] {
+        guard !segments.isEmpty else { return [] }
+        var paragraphs: [String] = []
+        var current: [String] = []
+        for seg in segments {
+            current.append(seg.text)
+            if TranscriptTurn.endsWithTerminalPunctuation(seg.text) {
+                paragraphs.append(TranscriptTurn.smartConcat(current))
+                current.removeAll(keepingCapacity: true)
+            }
+        }
+        if !current.isEmpty {
+            paragraphs.append(TranscriptTurn.smartConcat(current))
+        }
+        return paragraphs
+    }
+
+    /// True when `s`'s last non-whitespace character is a sentence
+    /// terminator. Covers both Japanese (。、！？) and ASCII (.!?).
+    /// 、 isn't included — it's a mid-sentence comma, not a paragraph
+    /// boundary.
+    static func endsWithTerminalPunctuation(_ s: String) -> Bool {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return false }
+        return "。．！？!?.".contains(last)
+    }
+
+    /// Concatenate consecutive segment texts with a single rule:
+    /// insert a space only at an ASCII word boundary (both adjacent
+    /// characters are ASCII letters / digits). CJK gets concatenated
+    /// directly, because joining "今日は" + "元気です" with " " produces
+    /// "今日は 元気です" which reads wrong in Japanese.
+    static func smartConcat(_ texts: [String]) -> String {
+        var result = ""
+        for raw in texts {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if result.isEmpty {
+                result = trimmed
+                continue
+            }
+            // ASCII word boundary needs a space; CJK doesn't.
+            let prev = result.last
+            let next = trimmed.first
+            let needsSpace =
+                (prev?.isLetter == true || prev?.isNumber == true) &&
+                (next?.isLetter == true || next?.isNumber == true) &&
+                prev?.isASCII == true && next?.isASCII == true
+            result += needsSpace ? " \(trimmed)" : trimmed
+        }
+        return result
     }
 }
 

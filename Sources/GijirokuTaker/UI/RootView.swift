@@ -190,7 +190,7 @@ struct TranscriptPane: View {
         ) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 18) {
                         ForEach(turns) { turn in
                             TranscriptTurnBlock(
                                 turn: turn,
@@ -199,8 +199,8 @@ struct TranscriptPane: View {
                             .id(turn.id)
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
                 .onChange(of: turns.last?.id) { _, newValue in
                     guard let newValue else { return }
@@ -222,11 +222,12 @@ struct TranscriptPane: View {
     }
 }
 
-/// One Notion-style speaker turn: a single block per speaker run, the
-/// confirmed text flows in as Whisper finalizes it, and a dimmed
-/// "in-progress" tail appears inline at the end while the rolling decoder
-/// is still rewriting it. No per-segment row borders — visually the
-/// transcript reads like prose, not a debug log of decoder boundaries.
+/// One Notion-style speaker turn: header line (speaker + time + source
+/// hint) above a flowing prose body. No card chrome — the eye reads
+/// continuous text and parses turns by the header, not by row borders.
+/// Confirmed paragraphs render as full-weight body text, with the live
+/// tail flowing inline as italicized secondary-color text at the end of
+/// the final paragraph so the user sees the decoder writing in real time.
 private struct TranscriptTurnBlock: View {
     let turn: TranscriptTurn
     let showDiarizationPlaceholder: Bool
@@ -238,56 +239,97 @@ private struct TranscriptTurnBlock: View {
     }()
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Rectangle()
-                .fill(accentColor)
-                .frame(width: 3)
-                .clipShape(RoundedRectangle(cornerRadius: 1.5, style: .continuous))
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if let speaker = turn.speaker {
-                        SpeakerBadge(label: speaker)
-                    } else if showDiarizationPlaceholder {
-                        SpeakerBadge(label: "nomatch")
-                    }
-                    Image(systemName: sourceSymbol)
-                        .font(.caption2)
-                        .foregroundStyle(sourceColor)
-                    Text(Self.timeFormatter.string(from: turn.startTime))
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                // Concatenate confirmed text + dimmed live tail in a single
-                // Text composition so the tail "flows" inline with the
-                // confirmed prose instead of appearing as a separate row.
-                composedText
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.leading, 10)
-            .padding(.trailing, 4)
-            .padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 6) {
+            header
+            paragraphs
         }
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(accentColor.opacity(0.05))
-        )
+        .padding(.vertical, 2)
     }
 
-    private var composedText: Text {
-        var combined = Text(turn.text)
-        if let tail = turn.liveTail {
-            // Separator + dim/italic tail. We can't use opacity on a Text
-            // run directly, so foregroundStyle(.secondary) plus italic()
-            // approximates "this is still being decoded".
-            let separator = turn.segments.isEmpty ? "" : " "
-            combined = combined + Text(separator + tail.text)
-                .italic()
+    private var header: some View {
+        HStack(alignment: .center, spacing: 6) {
+            Circle()
+                .fill(accentColor)
+                .frame(width: 8, height: 8)
+            if let speaker = turn.speaker {
+                SpeakerBadge(label: speaker)
+            } else if showDiarizationPlaceholder {
+                SpeakerBadge(label: "nomatch")
+            }
+            Image(systemName: sourceSymbol)
+                .font(.caption2)
+                .foregroundStyle(sourceColor.opacity(0.85))
+            Text("·")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(Self.timeFormatter.string(from: turn.startTime))
+                .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.secondary)
+            Spacer()
         }
+    }
+
+    /// Render each confirmed paragraph as its own Text view so SwiftUI
+    /// gives them real paragraph breaks. The live tail flows inline at
+    /// the end of the LAST paragraph (so it reads as the same sentence
+    /// continuing), unless the last paragraph already ended on a
+    /// sentence terminator — then the tail starts its own italic line.
+    @ViewBuilder
+    private var paragraphs: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            let confirmed = turn.paragraphs
+            if confirmed.isEmpty {
+                // No confirmed text yet — only the live tail. Render it
+                // as a standalone italic line so first words show up
+                // immediately without needing a confirmed paragraph
+                // anchor.
+                if let tail = turn.liveTail {
+                    Text(tail.text)
+                        .italic()
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                ForEach(Array(confirmed.enumerated()), id: \.offset) { idx, paragraph in
+                    let isLast = idx == confirmed.count - 1
+                    if isLast, let tail = turn.liveTail {
+                        composedLastParagraph(paragraph, tail: tail.text)
+                    } else {
+                        Text(paragraph)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 14) // align with the header's text baseline
+    }
+
+    /// Confirmed paragraph + inline italic live tail. If the paragraph
+    /// already ends with a sentence terminator we add a soft space so
+    /// the tail visually starts a new clause rather than mashing into
+    /// the period.
+    private func composedLastParagraph(_ paragraph: String, tail: String) -> some View {
+        var combined = Text(paragraph)
+        let needsSpace = !paragraph.isEmpty && tail.first?.isLetter == true && (paragraph.last?.isLetter == true || paragraph.last?.isPunctuation == true)
+        let separator: String
+        if paragraph.isEmpty {
+            separator = ""
+        } else if needsSpace {
+            separator = " "
+        } else {
+            separator = ""
+        }
+        combined = combined + Text(separator + tail)
+            .italic()
+            .foregroundStyle(.secondary)
         return combined
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var accentColor: Color {

@@ -66,7 +66,7 @@ MLX モデルを初めて選んだときは ~2〜5 GB が HuggingFace から `~/
 ## テスト
 
 ```bash
-swift test                                       # ~134 個の hermetic ユニットテスト
+swift test                                       # ~141 個の hermetic ユニットテスト
 RUN_OLLAMA_TESTS=1 swift test --filter ollama    # 実 Ollama との integration
 .build/debug/GijirokuCLI /path/to/audio.wav      # WAV ファイルからヘッドレス E2E
 ```
