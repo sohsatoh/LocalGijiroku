@@ -12,6 +12,8 @@ struct OnboardingView: View {
     let onComplete: () -> Void
 
     @ObservedObject private var settings = SettingsModel.shared
+    @ObservedObject private var downloads = ModelDownloadManager.shared
+    @ObservedObject private var permissions = PermissionsManager.shared
     @State private var step = 0
     @State private var availableModels: [ModelInfo] = []
     @State private var modelsLoading = false
@@ -29,6 +31,8 @@ struct OnboardingView: View {
                 .padding(.vertical, 12)
         }
         .frame(width: 620, height: 560)
+        .id(settings.appLanguage)
+        .environment(\.locale, L10n.locale())
         .task { await loadModels() }
     }
 
@@ -68,14 +72,39 @@ struct OnboardingView: View {
     }
 
     private var permissionsStep: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             sectionHeader(L10n.string("onboarding.permissions.title"), systemImage: "lock.shield")
-            permissionRow(systemImage: "mic.fill", text: L10n.string("onboarding.permissions.mic"))
-            permissionRow(systemImage: "rectangle.on.rectangle", text: L10n.string("onboarding.permissions.screen"))
             Text(loc: "onboarding.permissions.detail")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+
+            permissionRow(
+                systemImage: "mic.fill",
+                name: L10n.string("onboarding.permissions.mic"),
+                status: permissions.microphone,
+                kind: .microphone,
+                request: { Task { await permissions.requestMicrophone() } }
+            )
+            permissionRow(
+                systemImage: "rectangle.on.rectangle",
+                name: L10n.string("onboarding.permissions.screen"),
+                status: permissions.screenRecording,
+                kind: .screenRecording,
+                request: { permissions.requestScreenRecording() }
+            )
+            permissionRow(
+                systemImage: "bell.fill",
+                name: L10n.string("onboarding.permissions.notifications"),
+                status: permissions.notifications,
+                kind: .notifications,
+                request: { Task { await permissions.requestNotifications() } }
+            )
             Spacer()
+        }
+        .task { await permissions.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Refresh after the user grants in System Settings and tabs back.
+            Task { await permissions.refresh() }
         }
     }
 
@@ -120,6 +149,11 @@ struct OnboardingView: View {
                 }
             }
 
+            if settings.llmBackend == .mlx {
+                mlxDownloadStatus
+                    .padding(.leading, 2)
+            }
+
             // Language belongs here too — it primarily affects Whisper but
             // is part of "what kind of meetings will you record".
             Picker(L10n.string("settings.language"), selection: $settings.whisperLanguage) {
@@ -128,6 +162,76 @@ struct OnboardingView: View {
                 }
             }
             Spacer()
+        }
+        .task(id: prefetchKey) { triggerPrefetchIfNeeded() }
+        .onChange(of: downloads.stateByModel) { _, _ in
+            // Prefetch finished (or transitioned states) — re-scan the disk
+            // so the picker's "Downloaded ✓" reflects reality.
+            Task { await loadModels() }
+        }
+    }
+
+    /// Inline status row beneath the model picker. Drives the user's
+    /// expectation that they can press Next without waiting — the dispatch
+    /// happens in `triggerPrefetchIfNeeded`, this is purely the readout.
+    @ViewBuilder
+    private var mlxDownloadStatus: some View {
+        let state = downloads.state(for: settings.mlxModelID)
+        switch state {
+        case .idle:
+            EmptyView()
+        case .downloading(let f):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    ProgressView(value: f)
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: 220)
+                    Text(L10n.format("onboarding.llm.download_in_progress_format", Int(f * 100)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Text(loc: "onboarding.llm.download_caption")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .completed:
+            Label {
+                Text(loc: "onboarding.llm.download_completed")
+                    .font(.caption)
+            } icon: {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
+        case .failed(let message):
+            Label {
+                Text(L10n.format("onboarding.llm.download_failed_format", message))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// Re-trigger key for the LLM step's prefetch dispatcher: any change in
+    /// backend or selected mlx model id re-runs `triggerPrefetchIfNeeded`.
+    private var prefetchKey: String {
+        "\(settings.llmBackend.rawValue)|\(settings.mlxModelID)"
+    }
+
+    private func triggerPrefetchIfNeeded() {
+        guard settings.llmBackend == .mlx else { return }
+        let id = settings.mlxModelID
+        guard !id.isEmpty else { return }
+        downloads.prefetchMLX(id)
+        // The picker's "isDownloaded" badge is computed from the snapshot taken
+        // at loadModels(). Once a prefetch resolves we want the badge to flip
+        // to green too — re-scan the disk asynchronously.
+        Task {
+            await loadModels()
         }
     }
 
@@ -140,7 +244,6 @@ struct OnboardingView: View {
 
             Toggle(L10n.string("settings.capture_system"), isOn: $settings.captureSystemAudio)
             Toggle(L10n.string("settings.capture_mic"), isOn: $settings.captureMicrophone)
-            Toggle(L10n.string("settings.voice_processing"), isOn: $settings.voiceProcessingEnabled)
             Toggle(L10n.string("settings.diarization"), isOn: $settings.diarizationEnabled)
 
             Text(loc: "onboarding.audio.recommend")
@@ -158,7 +261,56 @@ struct OnboardingView: View {
             usageRow(number: 2, text: L10n.string("onboarding.usage.step_project"))
             usageRow(number: 3, text: L10n.string("onboarding.usage.step_view"))
             usageRow(number: 4, text: L10n.string("onboarding.usage.step_finish"))
+
+            Divider().padding(.vertical, 4)
+
+            // Final confirmation block — quick recap of what the user just set
+            // up. Helps catch "wait, I didn't grant screen recording" before
+            // they hit Record and the first session is silent.
+            Text(loc: "onboarding.recap.title")
+                .font(.subheadline.bold())
+            recapRow(label: L10n.string("onboarding.recap.permissions"), value: permissionRecap)
+            recapRow(label: L10n.string("onboarding.recap.llm"), value: "\(backendDisplay(settings.llmBackend)) · \(settings.activeLLMModelID)")
+            recapRow(label: L10n.string("onboarding.recap.audio"), value: audioRecap)
             Spacer()
+        }
+        .task { await permissions.refresh() }
+    }
+
+    private var permissionRecap: String {
+        let mic = recapBadge(permissions.microphone)
+        let scr = recapBadge(permissions.screenRecording)
+        let notif = recapBadge(permissions.notifications)
+        return "\(mic) \(L10n.string("onboarding.permissions.mic_short"))   \(scr) \(L10n.string("onboarding.permissions.screen_short"))   \(notif) \(L10n.string("onboarding.permissions.notifications_short"))"
+    }
+
+    private func recapBadge(_ status: PermissionsManager.Status) -> String {
+        switch status {
+        case .granted: return "✓"
+        case .notDetermined: return "?"
+        case .denied: return "✗"
+        }
+    }
+
+    private var audioRecap: String {
+        var parts: [String] = []
+        if settings.captureSystemAudio { parts.append(L10n.string("settings.capture_system")) }
+        if settings.captureMicrophone { parts.append(L10n.string("settings.capture_mic")) }
+        if settings.diarizationEnabled { parts.append(L10n.string("settings.diarization")) }
+        if parts.isEmpty { return "—" }
+        return parts.joined(separator: " · ")
+    }
+
+    private func recapRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 90, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -209,15 +361,65 @@ struct OnboardingView: View {
         }
     }
 
-    private func permissionRow(systemImage: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+    private func permissionRow(
+        systemImage: String,
+        name: String,
+        status: PermissionsManager.Status,
+        kind: PermissionsManager.Kind,
+        request: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: systemImage)
-                .font(.body)
-                .frame(width: 24)
+                .font(.title2)
+                .frame(width: 26)
                 .foregroundStyle(.tint)
-            Text(text)
-                .font(.body)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.body)
+                permissionStatusBadge(status)
+            }
             Spacer()
+            permissionAction(status: status, kind: kind, request: request)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+    }
+
+    @ViewBuilder
+    private func permissionStatusBadge(_ status: PermissionsManager.Status) -> some View {
+        switch status {
+        case .granted:
+            Label(L10n.string("onboarding.permissions.status_granted"), systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .notDetermined:
+            Label(L10n.string("onboarding.permissions.status_not_requested"), systemImage: "questionmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .denied:
+            Label(L10n.string("onboarding.permissions.status_denied"), systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder
+    private func permissionAction(
+        status: PermissionsManager.Status,
+        kind: PermissionsManager.Kind,
+        request: @escaping () -> Void
+    ) -> some View {
+        switch status {
+        case .granted:
+            EmptyView()
+        case .notDetermined:
+            Button(L10n.string("onboarding.permissions.request"), action: request)
+                .buttonStyle(.bordered)
+        case .denied:
+            Button(L10n.string("onboarding.permissions.open_settings")) {
+                permissions.openSystemSettings(for: kind)
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -234,25 +436,16 @@ struct OnboardingView: View {
         }
     }
 
+    /// Picker items in macOS SwiftUI collapse complex layouts to the first
+    /// `Text` — so size and tag chips placed in an HStack wouldn't actually
+    /// be visible in the dropdown. We pack everything into a single string
+    /// so size is reliably shown on every line.
+    /// We re-resolve `isDownloaded` live so the ✓ flips on as soon as the
+    /// prefetch completes — the snapshot one in `availableModels` lags.
     private func modelLabel(_ model: ModelInfo) -> some View {
-        HStack {
-            Text(model.displayName)
-            if let tag = model.catalogTag {
-                Text(L10n.string("model.tag.\(tag.rawValue.snakeCase)"))
-                    .font(.caption2)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color.accentColor.opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-            }
-            if let size = model.sizeEstimate {
-                Text("· \(size)").foregroundStyle(.secondary)
-            }
-            if model.isDownloaded {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            }
-        }
+        let live = MLXAvailableModelsProvider.isDownloaded(model.id)
+            || downloads.state(for: model.id) == .completed
+        return Text(ModelPickerLabel.string(for: model, isDownloadedOverride: live))
     }
 
     private func backendDisplay(_ backend: LLMBackend) -> String {
@@ -291,18 +484,3 @@ struct OnboardingView: View {
     }
 }
 
-private extension String {
-    /// `highAccuracy` → `high_accuracy` so it lines up with the strings table.
-    var snakeCase: String {
-        var result = ""
-        for ch in self {
-            if ch.isUppercase {
-                if !result.isEmpty { result += "_" }
-                result += String(ch).lowercased()
-            } else {
-                result.append(ch)
-            }
-        }
-        return result
-    }
-}

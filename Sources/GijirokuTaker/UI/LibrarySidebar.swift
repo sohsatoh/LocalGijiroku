@@ -107,20 +107,65 @@ struct LibrarySidebar: View {
             .keyboardShortcut("r", modifiers: [.command])
 
             if appModel.summaryProgress.isBusy || appModel.isRecording {
-                HStack(spacing: 6) {
-                    if appModel.isRecording, !appModel.summaryProgress.isBusy {
-                        Image(systemName: "waveform")
-                            .foregroundStyle(.red)
+                if appModel.summaryProgress.isBusy {
+                    // While the LLM is doing something (model DL, summarize,
+                    // extract, generate title), show the progress badge so the
+                    // user can see the loading bar / percentage instead of a
+                    // static "Recording..." text.
+                    ProgressBadge(progress: appModel.summaryProgress)
+                } else {
+                    HStack(spacing: 6) {
+                        if appModel.isRecording {
+                            Image(systemName: "waveform")
+                                .foregroundStyle(.red)
+                        }
+                        Text(appModel.statusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
-                    Text(appModel.isRecording ? appModel.statusMessage : appModel.summaryProgress.displayText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
                 }
+            }
+
+            // Per-session language picker. Default state = the global default
+            // from Settings → General. Choosing a value here overrides for the
+            // upcoming recording; selecting "Use default" clears the override.
+            // Hidden while a recording is in progress because the transcription
+            // engine has already been built for the locked-in language.
+            if !appModel.isRecording {
+                languagePicker
             }
         }
         .padding(8)
+    }
+
+    private var languagePicker: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "character.bubble")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("", selection: Binding(
+                get: { appModel.languageOverride ?? "" },
+                set: { newValue in
+                    appModel.languageOverride = newValue.isEmpty ? nil : newValue
+                }
+            )) {
+                Text(L10n.format("language.use_default_format", defaultLanguageDisplay))
+                    .tag("")
+                ForEach(WhisperLanguage.allCases) { lang in
+                    Text(lang.displayName).tag(lang.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .font(.caption)
+        }
+    }
+
+    private var defaultLanguageDisplay: String {
+        WhisperLanguage(rawValue: SettingsModel.shared.whisperLanguage)?.displayName
+            ?? SettingsModel.shared.whisperLanguage
     }
 
     // MARK: - Sessions list

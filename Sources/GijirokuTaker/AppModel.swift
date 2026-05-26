@@ -16,6 +16,17 @@ final class AppModel: ObservableObject {
     @Published var summaryProgress: SummaryProgress = .idle
     @Published var micWaveform = WaveformChannelState()
     @Published var systemWaveform = WaveformChannelState()
+    /// Per-session whisper language override. `nil` → use
+    /// `SettingsModel.shared.whisperLanguage`. Once the user explicitly picks a
+    /// language for an upcoming recording, the choice sticks across sessions
+    /// (within this app run) until they reset it. Not persisted to disk —
+    /// the persistent default lives in Settings.
+    @Published var languageOverride: String? = nil
+
+    /// The whisper language that will be used on next Start.
+    var effectiveLanguage: String {
+        languageOverride ?? settings.whisperLanguage
+    }
 
     private let settings: SettingsModel = .shared
     private let sessionStore: FileSessionStore
@@ -39,6 +50,24 @@ final class AppModel: ObservableObject {
 
     var summaryModelDisplay: String {
         "\(settings.llmBackend.rawValue) / \(settings.activeLLMModelID)"
+    }
+
+    /// Whether diarization is configured to run for the current session.
+    /// Forwards settings so SwiftUI views don't need to access SettingsModel.
+    var diarizationEnabled: Bool {
+        settings.diarizationEnabled
+    }
+
+    /// Number of distinct (non-nil) speaker labels currently in transcript.
+    /// Used by the live recording view's "Speakers: N detected" indicator.
+    var distinctSpeakerCount: Int {
+        var seen = Set<String>()
+        for seg in transcript {
+            if let s = seg.speaker, !s.isEmpty, !s.lowercased().contains("nomatch") {
+                seen.insert(s)
+            }
+        }
+        return seen.count
     }
 
     init() {
@@ -66,14 +95,26 @@ final class AppModel: ObservableObject {
             fputs("[GijirokuTaker] Ollama client created baseURL=\(llmBaseURL)\n", stderr)
         case .mlx:
             llm = MLXClient { [weak self] progress in
-                // fraction >= 0.99 (cache hit / DL 完了) では DL バッジを表示しない。
-                // 実 DL 中だけ「モデルDL中」を見せる方が UX として誤誘導が少ない。
-                guard progress.fraction < 0.99 else { return }
                 Task { @MainActor in
-                    self?.summaryProgress = .modelDownloading(
-                        modelID: progress.modelID,
-                        fraction: progress.fraction
-                    )
+                    guard let self else { return }
+                    // Below ~99% → real download in progress, show the
+                    // determinate bar with the percentage.
+                    // At or above 99% → the HuggingFace fetch is done and
+                    // the weights are being mapped into memory (or the model
+                    // was already cached). Switch to the indeterminate
+                    // "loading" state so the bar doesn't look frozen at 98%
+                    // during the multi-second memory-map step.
+                    if progress.fraction < 0.99 {
+                        self.summaryProgress = .modelDownloading(
+                            modelID: progress.modelID,
+                            fraction: progress.fraction
+                        )
+                    } else if case .modelDownloading = self.summaryProgress {
+                        // Only transition out of the active download state;
+                        // don't clobber a later `.extractingEvents` or
+                        // `.summarizing` that legitimately replaced us.
+                        self.summaryProgress = .modelLoading(modelID: progress.modelID)
+                    }
                 }
             }
             fputs("[GijirokuTaker] MLX client created\n", stderr)
@@ -81,7 +122,8 @@ final class AppModel: ObservableObject {
         self.client = llm
 
         let llmModelID = settings.activeLLMModelID
-        let language = settings.whisperLanguage == "auto" ? "auto" : (settings.whisperLanguage == "ja" ? "Japanese" : "English")
+        let whisperLangRaw = effectiveLanguage
+        let language = whisperLangRaw == "auto" ? "auto" : (whisperLangRaw == "ja" ? "Japanese" : "English")
 
         // Resolve summary style: builtin → user → project (session level
         // doesn't exist yet for an in-progress recording).
@@ -105,13 +147,13 @@ final class AppModel: ObservableObject {
         let eventExtractor = EventExtractor(client: llm, config: .init(model: llmModelID, style: resolvedStyle))
         self.eventExtractor = eventExtractor
 
-        let whisperLanguageRaw = settings.whisperLanguage
-        let whisperLang = (whisperLanguageRaw == "auto") ? nil : whisperLanguageRaw
+        let whisperLang = (whisperLangRaw == "auto") ? nil : whisperLangRaw
         let transcription = WhisperTranscription(
             config: .init(
                 modelName: settings.whisperModel,
                 language: whisperLang ?? "ja",
-                diarizationEnabled: settings.diarizationEnabled
+                diarizationEnabled: settings.diarizationEnabled,
+                vadEnabled: settings.vadEnabled
             )
         )
         self.transcriptionEngine = transcription
@@ -136,6 +178,10 @@ final class AppModel: ObservableObject {
         waveformTask = nil
         Task { [captureEngine] in await captureEngine?.stop() }
         captureEngine = nil
+        // Drop the lingering waveform levels right away so the UI visibly
+        // quiets down on Stop instead of freezing at the last sample.
+        micWaveform = WaveformChannelState()
+        systemWaveform = WaveformChannelState()
         statusMessage = L10n.string("status.saving")
         Task { await self.persistFinalSession() }
     }
@@ -237,8 +283,7 @@ final class AppModel: ObservableObject {
         let engine = AudioCaptureEngine(config: .init(
             captureSystem: settings.captureSystemAudio,
             captureMicrophone: settings.captureMicrophone,
-            preferredInputDeviceUID: preferredUID,
-            enableVoiceProcessing: settings.voiceProcessingEnabled
+            preferredInputDeviceUID: preferredUID
         ))
         captureEngine = engine
         guard let transcriber = transcriptionEngine else { return }
@@ -306,10 +351,26 @@ final class AppModel: ObservableObject {
             statusMessage = L10n.format("status.saved_format", String(session.id.uuidString.prefix(8)))
             summaryProgress = .done(at: .now, sections: summary.sections.count, events: events.count)
             LibraryModel.shared.reload()
+            // Hand the user off to the freshly-saved session so they see the
+            // result, and reset the live workspace so the next Start begins
+            // from a clean state instead of looking like the previous recording
+            // is still "going".
+            LibraryModel.shared.selection = [.session(session.id)]
+            resetLiveWorkspace()
         } catch {
             statusMessage = L10n.format("status.summary_error_format", error.localizedDescription)
             summaryProgress = .failed(message: error.localizedDescription)
         }
+    }
+
+    /// Clears the in-memory recording state. Called after a session has been
+    /// persisted to disk so re-entering the live view doesn't display the
+    /// previous meeting's transcript / summary / events.
+    private func resetLiveWorkspace() {
+        transcript.removeAll()
+        summary = CumulativeSummary()
+        events.removeAll()
+        pendingForSummary.removeAll()
     }
 
     /// Generates a short meeting title via the LLM and prefixes it with the
@@ -334,10 +395,14 @@ final class AppModel: ObservableObject {
             .init(role: .user, content: snippet),
         ]
         do {
+            // Title is ≤20 chars; 60 tokens is enough to express that in any
+            // language plus a brief reasoning halo. Tight cap = the post-stop
+            // wait time before the session lands in the sidebar.
             let raw = try await client.chat(
                 model: settings.activeLLMModelID,
                 messages: messages,
-                format: .text
+                format: .text,
+                maxTokens: 60
             )
             let cleaned = sanitizeTitle(raw)
             return cleaned.isEmpty ? "\(datePrefix) \(fallback)" : "\(datePrefix) \(cleaned)"
