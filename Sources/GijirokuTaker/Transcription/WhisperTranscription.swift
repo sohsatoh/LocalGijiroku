@@ -424,8 +424,18 @@ public actor WhisperTranscription: TranscriptionEngine {
             // approach without taking over the audio pipeline. Downstream
             // (TranscriptDeduper, autosave filter, LLM pipelines) keys off
             // `isConfirmed` to keep unstable text out of saved state.
+            //
+            // Floor: always confirm at least one segment when any exist.
+            // Without this, cycles that produce ≤ requiredSegments segments
+            // (low speech density, short audio, continuous monologue with
+            // no natural pauses) emit nothing as confirmed — the entire
+            // output ends up in the live tail, never reaches
+            // `pendingForSummary`, and the summary loop has nothing to feed
+            // to the LLM. Events / summary updates silently stop.
             let unconfirmedTail = config.requiredSegmentsForConfirmation
-            let cutoffIndex = max(0, flatSegments.count - unconfirmedTail)
+            let cutoffIndex = flatSegments.isEmpty
+                ? 0
+                : max(1, flatSegments.count - unconfirmedTail)
 
             // Confirmed segments stream out individually so the deduper can
             // merge each one with its earlier-cycle predecessor by time +
