@@ -67,50 +67,82 @@ public struct TranscriptDeduper {
            let crossOutcome = mergeAcrossSources(incoming, into: &transcript) {
             return crossOutcome
         }
-        let recent = transcript.suffix(config.lookbackWindow)
-        for existing in recent.reversed() {
+        // Find ALL eligible matches in the lookback window, not just the
+        // first. Two cycles of WhisperKit on the same rolling audio often
+        // split the same utterance differently — cycle N might emit
+        // ["今日は晴れ。", "明日は雨。"] and cycle N+1 emits a single
+        // combined "今日は晴れ。明日は雨。". With early-break-on-first-
+        // match, the combined incoming would replace one slot but leave
+        // the other as a duplicate fragment. Sweeping all matches lets us
+        // collapse subsumed entries in the same pass.
+        let lookbackStart = max(0, transcript.count - config.lookbackWindow)
+        var matchingIndices: [Int] = []
+        for i in lookbackStart..<transcript.count {
+            let existing = transcript[i]
             guard existing.source == incoming.source else { continue }
             let timeDelta = abs(existing.startTime.timeIntervalSince(incoming.startTime))
             guard timeDelta <= config.maxStartTimeDelta else { continue }
             let sim = Self.similarity(existing.text, incoming.text)
             guard sim >= config.similarityThreshold else { continue }
-            guard let idx = transcript.lastIndex(where: { $0.id == existing.id }) else { continue }
-            // Confirmation policy: once a segment is confirmed, its text is
-            // immutable. An unconfirmed re-emission for the same region is
-            // just stale — the rolling-window transcriber will keep
-            // emitting it for a few more cycles until it slides out of
-            // the buffer. Don't let it overwrite the confirmed wording.
-            let mergedText: String
-            if existing.isConfirmed && !incoming.isConfirmed {
-                mergedText = existing.text
-            } else {
-                let preferLonger = incoming.text.count >= existing.text.count
-                mergedText = preferLonger ? incoming.text : existing.text
-            }
-            let mergedConfirmed = existing.isConfirmed || incoming.isConfirmed
-            // If nothing actually changes, treat as a no-op.
-            if mergedText == existing.text,
-               incoming.startTime >= existing.startTime,
-               incoming.endTime <= existing.endTime,
-               incoming.isFinal == existing.isFinal,
-               mergedConfirmed == existing.isConfirmed {
-                return .ignored
-            }
-            transcript[idx] = TranscriptSegment(
-                id: existing.id,
-                source: existing.source,
-                speaker: incoming.speaker ?? existing.speaker,
-                text: mergedText,
-                startTime: min(existing.startTime, incoming.startTime),
-                endTime: max(existing.endTime, incoming.endTime),
-                isFinal: incoming.isFinal || existing.isFinal,
-                confidence: incoming.confidence ?? existing.confidence,
-                isConfirmed: mergedConfirmed
-            )
-            return .replaced(previousID: existing.id)
+            matchingIndices.append(i)
         }
-        transcript.append(incoming)
-        return .appended
+
+        guard let primaryIdx = matchingIndices.last else {
+            transcript.append(incoming)
+            return .appended
+        }
+        let primary = transcript[primaryIdx]
+
+        // Confirmation policy: once a segment is confirmed, its text is
+        // immutable. An unconfirmed re-emission for the same region is
+        // just stale — the rolling-window transcriber will keep emitting
+        // it for a few more cycles until it slides out of the buffer.
+        // Don't let it overwrite the confirmed wording.
+        let mergedText: String
+        if primary.isConfirmed && !incoming.isConfirmed {
+            mergedText = primary.text
+        } else {
+            let preferLonger = incoming.text.count >= primary.text.count
+            mergedText = preferLonger ? incoming.text : primary.text
+        }
+        let mergedConfirmed = primary.isConfirmed || incoming.isConfirmed
+
+        // If nothing actually changes AND there are no subsumed siblings
+        // to sweep, it's a true no-op.
+        let noChange = mergedText == primary.text &&
+            incoming.startTime >= primary.startTime &&
+            incoming.endTime <= primary.endTime &&
+            incoming.isFinal == primary.isFinal &&
+            mergedConfirmed == primary.isConfirmed
+        if noChange, matchingIndices.count == 1 {
+            return .ignored
+        }
+
+        transcript[primaryIdx] = TranscriptSegment(
+            id: primary.id,
+            source: primary.source,
+            speaker: incoming.speaker ?? primary.speaker,
+            text: mergedText,
+            startTime: min(primary.startTime, incoming.startTime),
+            endTime: max(primary.endTime, incoming.endTime),
+            isFinal: incoming.isFinal || primary.isFinal,
+            confidence: incoming.confidence ?? primary.confidence,
+            isConfirmed: mergedConfirmed
+        )
+
+        // Sweep any OTHER recent matches whose text is now fully contained
+        // in the merged result. Only remove on true containment — mere
+        // similarity above the threshold isn't enough justification to
+        // delete an existing entry. Iterate in reverse so the surviving
+        // indices stay valid as we remove.
+        for idx in matchingIndices.reversed() where idx != primaryIdx {
+            let other = transcript[idx]
+            if mergedText.contains(other.text) {
+                transcript.remove(at: idx)
+            }
+        }
+
+        return .replaced(previousID: primary.id)
     }
 
     /// Cross-source bleed handler: if `incoming` (mic) has similar text to a

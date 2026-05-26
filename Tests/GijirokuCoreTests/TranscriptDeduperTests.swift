@@ -61,6 +61,103 @@ import Foundation
     #expect(transcript[0].isConfirmed == true)
 }
 
+// MARK: - Cross-cycle re-segmentation
+
+@Test func collapsesEarlierFragmentWhenLaterCycleEmitsCombinedSentence() {
+    // Cycle 1 emitted two separate confirmed segments for one utterance.
+    // Cycle 2 re-decoded the same rolling audio and emitted a single
+    // combined segment that contains both fragments. The deduper must
+    // replace the most-recent match AND sweep the earlier fragment that
+    // is now fully subsumed by the merged text — otherwise the UI shows
+    // "今日は晴れです。" twice.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let a = TranscriptSegment(
+        source: .microphone,
+        text: "今日は晴れです。",
+        startTime: now,
+        endTime: now.addingTimeInterval(2),
+        isFinal: true
+    )
+    let b = TranscriptSegment(
+        source: .microphone,
+        text: "明日は雨です。",
+        startTime: now.addingTimeInterval(2),
+        endTime: now.addingTimeInterval(4),
+        isFinal: true
+    )
+    var transcript: [TranscriptSegment] = [a, b]
+    let combined = TranscriptSegment(
+        source: .microphone,
+        text: "今日は晴れです。明日は雨です。",
+        startTime: now,
+        endTime: now.addingTimeInterval(4),
+        isFinal: true
+    )
+    _ = deduper.merge(combined, into: &transcript)
+    #expect(transcript.count == 1)
+    #expect(transcript[0].text == "今日は晴れです。明日は雨です。")
+}
+
+@Test func sweepOnlyRemovesContainedSiblings() {
+    // Two existing segments overlap in time with the incoming but the
+    // incoming only contains ONE of them. The non-contained one should
+    // remain.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let a = TranscriptSegment(
+        source: .microphone,
+        text: "明日は雨で、傘が必要です。",
+        startTime: now,
+        endTime: now.addingTimeInterval(3),
+        isFinal: true
+    )
+    let b = TranscriptSegment(
+        source: .microphone,
+        text: "ところで会議は午後3時から。",
+        startTime: now.addingTimeInterval(3),
+        endTime: now.addingTimeInterval(6),
+        isFinal: true
+    )
+    var transcript: [TranscriptSegment] = [a, b]
+    // Refinement of just b, extends the trailing portion — fully contains
+    // b's existing text and does NOT contain a's text.
+    let refinedB = TranscriptSegment(
+        source: .microphone,
+        text: "ところで会議は午後3時から。早めに集合しましょう。",
+        startTime: now.addingTimeInterval(3),
+        endTime: now.addingTimeInterval(7),
+        isFinal: true
+    )
+    _ = deduper.merge(refinedB, into: &transcript)
+    #expect(transcript.count == 2)
+    #expect(transcript[0].text == "明日は雨で、傘が必要です。")
+    #expect(transcript[1].text == "ところで会議は午後3時から。早めに集合しましょう。")
+}
+
+@Test func sweepCollapsesThreeFragmentsIntoOne() {
+    // Stress case: three earlier fragments all subsumed by a single
+    // late-cycle combined emission. The deduper picks the newest as the
+    // primary, merges the incoming into it, and removes the other two.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript: [TranscriptSegment] = [
+        TranscriptSegment(source: .system, text: "今日は", startTime: now, endTime: now.addingTimeInterval(1), isFinal: true),
+        TranscriptSegment(source: .system, text: "晴れの予報で", startTime: now.addingTimeInterval(1), endTime: now.addingTimeInterval(2), isFinal: true),
+        TranscriptSegment(source: .system, text: "傘は不要です。", startTime: now.addingTimeInterval(2), endTime: now.addingTimeInterval(3), isFinal: true),
+    ]
+    let combined = TranscriptSegment(
+        source: .system,
+        text: "今日は晴れの予報で傘は不要です。",
+        startTime: now,
+        endTime: now.addingTimeInterval(3),
+        isFinal: true
+    )
+    _ = deduper.merge(combined, into: &transcript)
+    #expect(transcript.count == 1)
+    #expect(transcript[0].text == "今日は晴れの予報で傘は不要です。")
+}
+
 @Test func confirmedNotDowngradedByLongerUnconfirmedRewrite() {
     // Edge case: the unconfirmed rewrite is LONGER than the confirmed
     // text. Without the confirmation policy, the deduper's
