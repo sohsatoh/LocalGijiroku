@@ -50,8 +50,10 @@ final class SettingsModel: ObservableObject {
     /// segmentation + embedding の CoreML モデル (~30MB) が DL される。
     /// ローリング窓ごとに diarize するので、Speaker ラベルは「同じ窓内」では
     /// 一貫するが、窓を跨ぐと別の人に再割当される可能性がある（v2 で
-    /// 永続クラスタリングを検討）。
-    @AppStorage(Keys.diarizationEnabled) var diarizationEnabled: Bool = false
+    /// 永続クラスタリングを検討）。デフォルト ON: 「mic = あなた」固定 +
+    /// system 側を pyannote で分離する構成のため、OFF にすると要約から
+    /// 話者の手がかりが完全に消える。
+    @AppStorage(Keys.diarizationEnabled) var diarizationEnabled: Bool = true
     /// Tracks whether the first-launch onboarding sheet has been shown and
     /// dismissed. UI offers a menu command to re-show it later.
     @AppStorage(Keys.onboardingCompleted) var onboardingCompleted: Bool = false
