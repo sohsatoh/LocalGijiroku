@@ -7,6 +7,85 @@ import SpeakerKit
 // WhisperKit also defines a public `AudioChunk` struct that collides with
 // GijirokuCore.AudioChunk. We refer to ours by module-qualified name throughout
 // this file to avoid ambiguity.
+
+/// Module-level cache for loaded WhisperKit instances. The cold-load cost for
+/// large-v3 (download check + weight read + Metal kernel compilation) is
+/// 15–20 s. Without a cache, every `startRecording` creates a fresh
+/// `WhisperTranscription` actor and pays that cost again, which surfaces as
+/// the user's "first 30 seconds of audio have no transcript" complaint.
+///
+/// Keying includes the VAD config because the VAD is wired into the
+/// `WhisperKitConfig` at init time; changing it requires a re-init. Two
+/// sessions with the same model + VAD setup will share one underlying
+/// WhisperKit instance.
+///
+/// We need `@unchecked Sendable` because WhisperKit itself isn't Sendable —
+/// we serialize access via NSLock and the in-flight Task map, and the
+/// existing `WhisperTranscription` actor already crosses this boundary by
+/// holding a `WhisperKit?` property of its own.
+/// `WhisperKit` doesn't conform to Sendable so it can't cross actor / Task
+/// boundaries on its own. We wrap it in a box that opts out of Sendable
+/// checking — synchronization is provided by the cache's `NSLock` and by the
+/// fact that we never mutate the `kit` after `WhisperKit.init` returns.
+struct WhisperKitBox: @unchecked Sendable {
+    let kit: WhisperKit
+}
+
+final class WhisperModelCache: @unchecked Sendable {
+    static let shared = WhisperModelCache()
+
+    private let lock = NSLock()
+    private var cache: [String: WhisperKitBox] = [:]
+    private var inFlight: [String: Task<WhisperKitBox, Error>] = [:]
+
+    static func cacheKey(modelName: String, vadEnabled: Bool, vadEnergyThreshold: Float) -> String {
+        "\(modelName)|vad:\(vadEnabled):\(vadEnergyThreshold)"
+    }
+
+    func loadModel(
+        name: String,
+        vadEnabled: Bool,
+        vadEnergyThreshold: Float
+    ) async throws -> WhisperKit {
+        let key = Self.cacheKey(modelName: name, vadEnabled: vadEnabled, vadEnergyThreshold: vadEnergyThreshold)
+        // De-duplicate concurrent loads — a preload Task at app launch and a
+        // startRecording call shortly after must not load the same model
+        // twice. Whichever Task got here first owns the load; the rest await
+        // its result.
+        let task = lock.withLock { () -> Task<WhisperKitBox, Error> in
+            if let cached = cache[key] {
+                return Task { cached }
+            }
+            if let pending = inFlight[key] {
+                return pending
+            }
+            let new = Task<WhisperKitBox, Error> {
+                let vad: VoiceActivityDetector? = vadEnabled
+                    ? EnergyVAD(energyThreshold: vadEnergyThreshold)
+                    : nil
+                let kit = try await WhisperKit(WhisperKitConfig(
+                    model: name,
+                    voiceActivityDetector: vad
+                ))
+                return WhisperKitBox(kit: kit)
+            }
+            inFlight[key] = new
+            return new
+        }
+        do {
+            let box = try await task.value
+            lock.withLock {
+                cache[key] = box
+                inFlight[key] = nil
+            }
+            return box.kit
+        } catch {
+            lock.withLock { inFlight[key] = nil }
+            throw error
+        }
+    }
+}
+
 public actor WhisperTranscription: TranscriptionEngine {
     public struct Config: Sendable {
         public let modelName: String
@@ -26,14 +105,25 @@ public actor WhisperTranscription: TranscriptionEngine {
         /// benefits from a higher value to filter background hiss.
         public let vadEnergyThreshold: Float
 
+        /// Number of trailing segments per source kept as unconfirmed each
+        /// inference cycle. Matches WhisperKit's `AudioStreamTranscriber`
+        /// default of 2 — the most recent ~10 s of speech is still in the
+        /// "may be rewritten by the next pass" zone, everything older is
+        /// promoted to confirmed.
+        public let requiredSegmentsForConfirmation: Int
+
         public init(
             modelName: String = "large-v3-v20240930_626MB",
             language: String = "ja",
             windowSeconds: TimeInterval = 25,
-            inferenceInterval: TimeInterval = 5,
+            // 2 s feels live (~5× the previous 5 s polling cadence) and the
+            // 626 MB large-v3-turbo model finishes a 25 s window in well
+            // under 2 s on Apple Silicon, so the loop doesn't fall behind.
+            inferenceInterval: TimeInterval = 2,
             diarizationEnabled: Bool = false,
             vadEnabled: Bool = true,
-            vadEnergyThreshold: Float = 0.02
+            vadEnergyThreshold: Float = 0.02,
+            requiredSegmentsForConfirmation: Int = 2
         ) {
             self.modelName = modelName
             self.language = language
@@ -42,6 +132,7 @@ public actor WhisperTranscription: TranscriptionEngine {
             self.diarizationEnabled = diarizationEnabled
             self.vadEnabled = vadEnabled
             self.vadEnergyThreshold = vadEnergyThreshold
+            self.requiredSegmentsForConfirmation = requiredSegmentsForConfirmation
         }
     }
 
@@ -137,17 +228,13 @@ public actor WhisperTranscription: TranscriptionEngine {
     private func ensureLoaded() async throws -> WhisperKit {
         if let whisper { return whisper }
         logger.info("Loading WhisperKit model=\(self.config.modelName, privacy: .public) (downloads on first use)...")
-        // Hand WhisperKit an EnergyVAD when enabled so it can pre-segment the
-        // rolling audio window by silence — yields segment boundaries that
-        // align with speech pauses instead of Whisper's internal token
-        // heuristics. EnergyVAD is cheap and configured via energyThreshold.
-        let vad: VoiceActivityDetector? = config.vadEnabled
-            ? EnergyVAD(energyThreshold: config.vadEnergyThreshold)
-            : nil
-        let kit = try await WhisperKit(WhisperKitConfig(
-            model: config.modelName,
-            voiceActivityDetector: vad
-        ))
+        // Delegate to the module-level cache so a second session with the
+        // same config reuses the already-loaded WhisperKit instance.
+        let kit = try await WhisperModelCache.shared.loadModel(
+            name: config.modelName,
+            vadEnabled: config.vadEnabled,
+            vadEnergyThreshold: config.vadEnergyThreshold
+        )
         whisper = kit
         if config.vadEnabled {
             fputs("[WhisperTranscription] VAD enabled (energyThreshold=\(config.vadEnergyThreshold))\n", stderr)
@@ -156,6 +243,13 @@ public actor WhisperTranscription: TranscriptionEngine {
         }
         logger.info("WhisperKit loaded.")
         return kit
+    }
+
+    /// Eagerly load the WhisperKit model so the cold-load cost is paid
+    /// before the first recording starts. Safe to call any time — the
+    /// underlying cache deduplicates concurrent loads.
+    public func preload() async throws {
+        _ = try await ensureLoaded()
     }
 
     /// Lazily loads SpeakerKit. Returns nil (with a logged error) if loading
@@ -300,12 +394,15 @@ public actor WhisperTranscription: TranscriptionEngine {
                 }
             }
 
-            for result in results {
-                for seg in result.segments {
+            // Flatten + sort so the confirmation split below treats the
+            // segments in chronological order, regardless of how the
+            // WhisperKit result was chunked internally.
+            let flatSegments: [(TranscriptionSegment, Date, Date, String?)] = results.flatMap { result in
+                result.segments.compactMap { seg in
                     let raw: String = seg.text
                     let text = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                    guard !text.isEmpty else { continue }
-                    if Self.hallucinationPatterns.contains(text) { continue }
+                    guard !text.isEmpty else { return nil }
+                    if Self.hallucinationPatterns.contains(text) { return nil }
                     let segStart = bufferStartedAt.addingTimeInterval(TimeInterval(seg.start))
                     let segEnd = bufferStartedAt.addingTimeInterval(TimeInterval(seg.end))
                     let stableSpeaker: String?
@@ -316,18 +413,33 @@ public actor WhisperTranscription: TranscriptionEngine {
                         let localSpeaker = Self.speaker(at: midpoint, in: speakerSpans)
                         stableSpeaker = localSpeaker.flatMap { labelMap[$0] } ?? localSpeaker
                     }
-                    let transcript = TranscriptSegment(
-                        source: source,
-                        speaker: stableSpeaker,
-                        text: text,
-                        startTime: segStart,
-                        endTime: segEnd,
-                        isFinal: false
-                    )
-                    let preview = text.prefix(60)
-                    logger.info("\(String(describing: source), privacy: .public) seg: \"\(String(preview), privacy: .public)\" speaker=\(stableSpeaker ?? "-", privacy: .public)")
-                    output.yield(transcript)
+                    return (seg, segStart, segEnd, stableSpeaker)
                 }
+            }.sorted { $0.1 < $1.1 }
+
+            // Streaming confirmation policy: the last
+            // `requiredSegmentsForConfirmation` segments stay unconfirmed
+            // (Whisper may rewrite them once more audio arrives), the rest
+            // are stable enough to confirm. Mirrors AudioStreamTranscriber's
+            // approach without taking over the audio pipeline. Downstream
+            // (TranscriptDeduper, autosave filter, LLM pipelines) keys off
+            // `isConfirmed` to keep unstable text out of saved state.
+            let unconfirmedTail = config.requiredSegmentsForConfirmation
+            let cutoffIndex = max(0, flatSegments.count - unconfirmedTail)
+            for (i, item) in flatSegments.enumerated() {
+                let confirmed = i < cutoffIndex
+                let transcript = TranscriptSegment(
+                    source: source,
+                    speaker: item.3,
+                    text: item.0.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
+                    startTime: item.1,
+                    endTime: item.2,
+                    isFinal: confirmed,
+                    isConfirmed: confirmed
+                )
+                let preview = transcript.text.prefix(60)
+                logger.info("\(String(describing: source), privacy: .public) seg \(confirmed ? "✓" : "…", privacy: .public): \"\(String(preview), privacy: .public)\" speaker=\(item.3 ?? "-", privacy: .public)")
+                output.yield(transcript)
             }
         } catch {
             logger.error("Inference failed: \(error.localizedDescription, privacy: .public)")

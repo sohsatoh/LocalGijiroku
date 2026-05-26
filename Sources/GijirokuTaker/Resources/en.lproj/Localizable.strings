@@ -196,6 +196,8 @@
 
 /* === Meeting title default === */
 "meeting.default_title" = "Meeting";
+"meeting.in_progress_title" = "Recording (autosaved)";
+"meeting.recovered_prefix" = "[Recovered] ";
 
 /* === Model tags (shown next to picker entries) === */
 "model.tag.lightweight" = "Lightweight";

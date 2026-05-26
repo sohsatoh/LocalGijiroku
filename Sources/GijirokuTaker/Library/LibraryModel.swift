@@ -186,7 +186,10 @@ final class LibraryModel: ObservableObject {
 
         regenerationProgress = .summarizing(segmentCount: session.transcript.count)
         do {
-            let newSummary = try await summaryEngine.ingest(newSegments: session.transcript)
+            // Full-pass regenerate: produce a fresh summary over the entire
+            // saved transcript in one shot, replacing whatever the
+            // recording-time delta loop accumulated.
+            let newSummary = try await summaryEngine.regenerate(transcript: session.transcript)
             regenerationProgress = .extractingEvents(segmentCount: session.transcript.count)
             let newEvents = try await eventExtractor.extract(from: session.transcript)
             var merged: [MeetingEvent] = []

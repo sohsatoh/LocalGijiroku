@@ -2,6 +2,113 @@ import Testing
 import Foundation
 @testable import GijirokuCore
 
+// MARK: - Confirmation streaming
+
+@Test func confirmationStaysStickyAgainstUnconfirmedRewrite() {
+    // Whisper re-emits the same time range in a later cycle (rolling
+    // window). The first emission was confirmed; the refinement arrives
+    // unconfirmed with slightly different wording. The confirmed text
+    // wins — once we've trusted it, we don't let an unstable rewrite
+    // overwrite it.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let confirmed = TranscriptSegment(
+        source: .microphone,
+        text: "今日はいい天気です",
+        startTime: now,
+        endTime: now.addingTimeInterval(3),
+        isFinal: true,
+        isConfirmed: true
+    )
+    var transcript = [confirmed]
+    let refinement = TranscriptSegment(
+        source: .microphone,
+        text: "今日はいい天気ですね今",
+        startTime: now,
+        endTime: now.addingTimeInterval(3.5),
+        isFinal: false,
+        isConfirmed: false
+    )
+    _ = deduper.merge(refinement, into: &transcript)
+    #expect(transcript.count == 1)
+    #expect(transcript[0].text == "今日はいい天気です")
+    #expect(transcript[0].isConfirmed == true)
+}
+
+@Test func unconfirmedSegmentPromotedByLaterConfirmedEcho() {
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let unconf = TranscriptSegment(
+        source: .system,
+        text: "プランBで行きます",
+        startTime: now,
+        endTime: now.addingTimeInterval(2),
+        isFinal: false,
+        isConfirmed: false
+    )
+    var transcript = [unconf]
+    let later = TranscriptSegment(
+        source: .system,
+        text: "プランBで行きます",
+        startTime: now,
+        endTime: now.addingTimeInterval(2),
+        isFinal: true,
+        isConfirmed: true
+    )
+    let outcome = deduper.merge(later, into: &transcript)
+    #expect(outcome == .replaced(previousID: unconf.id))
+    #expect(transcript.count == 1)
+    #expect(transcript[0].isConfirmed == true)
+}
+
+@Test func confirmedNotDowngradedByLongerUnconfirmedRewrite() {
+    // Edge case: the unconfirmed rewrite is LONGER than the confirmed
+    // text. Without the confirmation policy, the deduper's
+    // "preferLonger" rule would replace the confirmed text.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let confirmed = TranscriptSegment(
+        source: .microphone,
+        text: "決定事項です",
+        startTime: now,
+        endTime: now.addingTimeInterval(2),
+        isFinal: true,
+        isConfirmed: true
+    )
+    var transcript = [confirmed]
+    let longerUnconfirmed = TranscriptSegment(
+        source: .microphone,
+        text: "決定事項ですよね今のところ",
+        startTime: now,
+        endTime: now.addingTimeInterval(2.5),
+        isFinal: false,
+        isConfirmed: false
+    )
+    _ = deduper.merge(longerUnconfirmed, into: &transcript)
+    #expect(transcript[0].text == "決定事項です")
+    #expect(transcript[0].isConfirmed == true)
+}
+
+@Test func transcriptSegmentDecodesLegacyJSONWithoutIsConfirmedField() throws {
+    // Saved sessions from before isConfirmed existed must read as
+    // confirmed (the saved transcript is the final version).
+    let legacy = #"""
+    {
+      "id":"00000000-0000-0000-0000-000000000001",
+      "source":"microphone",
+      "text":"hello",
+      "startTime":"2026-01-01T00:00:00Z",
+      "endTime":"2026-01-01T00:00:02Z",
+      "isFinal":true
+    }
+    """#.data(using: .utf8)!
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let seg = try decoder.decode(TranscriptSegment.self, from: legacy)
+    #expect(seg.isConfirmed == true)
+    #expect(seg.text == "hello")
+}
+
 private func segment(_ text: String, source: AudioSource = .microphone, start: TimeInterval = 0, duration: TimeInterval = 1, id: UUID = UUID()) -> TranscriptSegment {
     let origin = Date(timeIntervalSinceReferenceDate: 0)
     return TranscriptSegment(

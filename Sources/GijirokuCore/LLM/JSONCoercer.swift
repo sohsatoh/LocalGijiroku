@@ -24,6 +24,7 @@ public enum JSONCoercer {
         public let owner: String?
         public let due: String?
         public let resolved: Bool
+        public let resolution: String?
     }
 
     /// Coerce any JSON tree into `[SectionDTO]`. Accepts:
@@ -42,6 +43,31 @@ public enum JSONCoercer {
         return out
     }
 
+    /// Coerce any JSON tree into `[SummaryUpdate]`. Accepts:
+    ///   - `{"updates":[{"section":..., "bullets":[...]}, ...]}` (canonical)
+    ///   - `[{"section":..., "bullets":[...]}, ...]` (top-level array)
+    ///   - `{"section":..., "bullets":[...]}` (single bare update)
+    /// Falls back to common aliases (`title` / `heading` for section,
+    /// `points` / `items` for bullets) so a small model that drifts back
+    /// toward the full-summary shape still parses.
+    public static func coerceUpdates(_ root: Any) -> [SummaryUpdate] {
+        var out: [SummaryUpdate] = []
+        for dict in extractEntries(
+            from: root,
+            envelopeKeys: ["updates", "additions", "sections"],
+            looseKeys: ["section", "title", "heading"]
+        ) {
+            guard let section = firstString(of: ["section", "title", "heading", "name"], in: dict) else { continue }
+            let rawBullets = firstValue(of: ["bullets", "points", "items", "content"], in: dict)
+            let bullets = rawBullets.map(flattenToStrings) ?? []
+            // Empty-bullet updates are no-ops; drop them so applyUpdates
+            // doesn't churn the summary with a header-only insertion.
+            guard !bullets.isEmpty else { continue }
+            out.append(SummaryUpdate(section: section, bullets: bullets))
+        }
+        return out
+    }
+
     /// Coerce any JSON tree into `[EventDTO]`. Accepts:
     ///   - `{"events":[{"kind":..., "text":...}, ...]}`
     ///   - `[{"kind":..., "text":...}, ...]`
@@ -56,7 +82,11 @@ public enum JSONCoercer {
             let owner = firstString(of: ["owner", "assignee", "responsible", "person"], in: dict)
             let due = firstString(of: ["due", "dueDate", "deadline", "by"], in: dict)
             let resolved = firstBool(of: ["resolved", "closed", "done", "answered"], in: dict) ?? false
-            out.append(.init(kind: kindRaw, text: text, owner: owner, due: due, resolved: resolved))
+            let resolution = firstString(of: ["resolution", "answer", "outcome", "conclusion"], in: dict)
+            out.append(.init(
+                kind: kindRaw, text: text, owner: owner, due: due,
+                resolved: resolved, resolution: resolution
+            ))
         }
         return out
     }

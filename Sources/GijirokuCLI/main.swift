@@ -96,7 +96,7 @@ struct GijirokuCLI {
                 client: client,
                 config: .init(model: llmModel, language: "Japanese")
             )
-            let summary = try await summaryEngine.ingest(newSegments: segments)
+            let summary = try await summaryEngine.regenerate(transcript: segments)
             print("==> Summary sections: \(summary.sections.count)")
             for section in summary.sections {
                 print("  ## \(section.title)")

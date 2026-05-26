@@ -48,12 +48,17 @@ NO_SUMMARY=1 .build/debug/GijirokuCLI audio.wav     # transcribe only
 Four SwiftPM targets, layered:
 
 ```
-GijirokuCore  (no deps)         pure logic: AudioChunk, TranscriptSegment,
-                                LLMClient protocol, OllamaClient,
-                                SummaryEngine / EventExtractor (think-tag
-                                stripping + balanced-JSON extraction),
+GijirokuCore  (no deps)         pure logic: AudioChunk, TranscriptSegment
+                                (with isConfirmed flag for the streaming
+                                tail), LLMClient protocol, OllamaClient,
+                                SummaryEngine (appendDelta + consolidate
+                                + regenerate) / EventExtractor (think-tag
+                                stripping + balanced-JSON extraction +
+                                resolution detection against open events),
                                 SummaryStyle, Project, Session,
-                                FileSessionStore, FileProjectStore
+                                FileSessionStore, FileProjectStore,
+                                DraftRecovery (promote orphan drafts on
+                                relaunch).
                                  │
 GijirokuLLM   ─── deps on Core, MLX, HuggingFace, Tokenizers
                                 MLXClient (actor) — caches loaded
@@ -84,12 +89,12 @@ GijirokuCLI                     headless runner for E2E pipeline tests
 
 ### Live recording data flow
 
-1. `AppModel.startRecording` builds per-session engines from `SettingsModel` + `LibraryModel.shared.activeProjectID` (so settings/style/project changes take effect on next Start).
+1. `AppModel.startRecording` builds per-session engines from `SettingsModel` + `LibraryModel.shared.activeProjectID` (so settings/style/project changes take effect on next Start). It also writes an empty draft session immediately and kicks off a 30 s autosave loop (`Drafts/` directory under Application Support).
 2. `AudioCaptureEngine.start()` returns an `AsyncStream<AudioChunk>`. The same chunks are multicast to any `subscribeWaveform()` consumers (UI level meters).
-3. `WhisperTranscription.transcribe(_:)` consumes that stream, batches into a 25s rolling buffer, runs WhisperKit every 5s, optionally runs SpeakerKit on the same window, then yields `TranscriptSegment`s.
-4. `AppModel.append(segment:)` runs the segments through `TranscriptDeduper` (containment + jaccard + ±12s time gate) before adding to `transcript` and `pendingForSummary`.
-5. Every `summaryUpdateInterval` seconds (default 30s) `flushSummaryWindow` ships `pendingForSummary` to `SummaryEngine.ingest` (incremental — passes current summary as JSON + delta segments) and then `EventExtractor.extract`. New events are merged with `EventMerger` (kind + 20-char-prefix dedupe; later events upgrade owner/due in place, keep the original UUID so UI ordering stays stable).
-6. On Stop, `generateTitle()` asks the LLM for a ≤20-char title, then `Session(projectId:, title:, ...)` is written via `FileSessionStore.save` and `LibraryModel.shared.reload()` refreshes the sidebar.
+3. `WhisperTranscription.transcribe(_:)` consumes that stream, batches into a 25 s rolling buffer, and runs WhisperKit every `inferenceInterval` seconds (default 2 s — short cadence for live-stream feel). Each pass marks the last `requiredSegmentsForConfirmation` (default 2) segments as **unconfirmed** and everything older as **confirmed**, mirroring `AudioStreamTranscriber`'s policy. Optionally runs SpeakerKit on the same window. WhisperKit instances are cached at module level (`WhisperModelCache`) by `(modelName, vadEnabled, vadEnergyThreshold)`, and `App.init` kicks off a background preload so Start doesn't pay the 15–20 s cold-load cost.
+4. `AppModel.append(segment:)` runs the segments through `TranscriptDeduper`. The deduper merges by source + Jaccard similarity + ±12 s time gate, and applies a **confirmation-sticky** policy: once confirmed, a segment's text cannot be overwritten by a later unconfirmed rewrite. `pendingForSummary` only accumulates confirmed segments — unconfirmed text is never shown to the LLM.
+5. Every `summaryUpdateInterval` seconds (default 30 s) `flushSummaryWindow` calls `SummaryEngine.appendDelta` (append-only — the LLM sees only section titles + the delta and emits just new bullets), then `SummaryEngine.consolidate` (re-summarizes the resulting summary so semantic duplicates / over-density are folded — early-skip < 4 bullets, drastic-shrink guard), then `EventExtractor.extract` with the current open events for resolution detection. New events are merged with `EventMerger` (kind + 20-char-prefix dedupe; sticky `resolved` field). A draft snapshot is written to disk right after.
+6. On Stop, the autosave loop stops, `SummaryEngine.regenerate(transcript:)` runs once over the **confirmed-only** transcript to produce the polished saved summary, `generateTitle(transcript:)` asks the LLM for a ≤ 20-char title, then `Session(...)` is written via `FileSessionStore.save`. The draft is deleted on successful save. If the app crashes before this point, the next launch's `DraftRecovery.promoteOrphans` promotes any leftover draft into Sessions with a `[復元]` / `[Recovered]` title prefix.
 
 ### Why the split between AppModel and LibraryModel
 
@@ -104,6 +109,12 @@ OSLog `.info` / `.notice` are reliably suppressed when the app is launched as a 
 ### Localization
 
 `Sources/GijirokuTaker/Resources/{ja,en}.lproj/Localizable.strings` is shipped via SwiftPM `.process("Resources")`. All UI text goes through `L10n.string(_:)` / `L10n.format(_:_:)` / `Text(loc: "key")` / `Label(loc:systemImage:)` (defined in `UI/Localization.swift`). These reach `Bundle.module`, not `Bundle.main`. `defaultLocalization: "ja"` is set on the Package so the SPM resource bundle is wired correctly. Only two textual classes remain hard-coded — the Whisper hallucination dictionary (`WhisperTranscription.swift`) and the LLM-output prefix stripper in `AppModel.sanitizeTitle`. Both operate on model output, not user-facing strings.
+
+### Confirmed vs. unconfirmed transcript segments
+
+`TranscriptSegment.isConfirmed` drives both the UI (unconfirmed rows render italic at ~55 % opacity so the live tail is visibly distinct) and the downstream pipeline. Anything that persists or feeds the LLM — autosave drafts, `pendingForSummary`, `runRegeneration`, the Stop-time full regenerate, `generateTitle` — operates on `confirmedTranscript` (a computed view that filters `transcript`). Without this filter, the rolling unconfirmed tail flips text every 2 s and the LLM produces flaky summaries / titles that don't stabilize.
+
+The Codable decoder defaults `isConfirmed` to `true` when missing, so sessions saved by older builds load as fully-confirmed transcripts.
 
 ### Project / Session storage
 
@@ -174,3 +185,23 @@ Include `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` a
 Never commit build artifacts (`build/`, `.build/`, `xcode-build/`), local model caches, recordings, or anything matching `.gitignore`. Re-run `git status` before staging to confirm.
 
 Only push when the user explicitly asks; commits accumulate locally otherwise.
+
+## Docs hygiene after each change
+
+After landing a coherent unit of work, check whether `README.md` and this
+`CLAUDE.md` still describe reality and update them when they don't. Diff-
+based minimal edits — don't rewrite, don't reorganize, just fix what's
+stale. Triggers worth thinking about:
+
+- Public API shape change (new method on `SummaryEngine` /
+  `EventExtractor`, renamed lifecycle hook in `AppModel`, new persistence
+  store, etc.)
+- New command, env var, or build step in `scripts/`
+- Architectural shift (e.g. transcription mode changes, new actor on the
+  hot path, new on-disk directory under Application Support)
+- Settings / config additions, removed dependencies, model defaults
+  flipping
+
+When skipping a doc update, that's a positive decision, not the default —
+sanity-check that the existing wording still matches the new behaviour
+before moving on.

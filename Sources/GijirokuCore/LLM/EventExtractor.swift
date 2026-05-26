@@ -22,6 +22,10 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
     /// reader can see "this was asked / proposed but is now closed" —
     /// we never silently drop events, we surface their state instead.
     public let resolved: Bool
+    /// One-line summary of HOW the event was resolved (the answer to a
+    /// question, the conclusion of a topic, the outcome of an action).
+    /// Only meaningful when `resolved` is true; nil otherwise.
+    public let resolution: String?
 
     public init(
         id: UUID = UUID(),
@@ -30,7 +34,8 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         owner: String? = nil,
         dueDate: String? = nil,
         detectedAt: Date = .now,
-        resolved: Bool = false
+        resolved: Bool = false,
+        resolution: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -39,10 +44,12 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         self.dueDate = dueDate
         self.detectedAt = detectedAt
         self.resolved = resolved
+        self.resolution = resolution
     }
 
-    /// Custom decoder so MeetingEvent JSON saved before `resolved` existed
-    /// still loads cleanly — missing field defaults to false.
+    /// Custom decoder so MeetingEvent JSON saved before `resolved` /
+    /// `resolution` existed still loads cleanly — missing fields default
+    /// to false / nil.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
@@ -52,10 +59,11 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         self.dueDate = try? c.decode(String.self, forKey: .dueDate)
         self.detectedAt = try c.decode(Date.self, forKey: .detectedAt)
         self.resolved = (try? c.decode(Bool.self, forKey: .resolved)) ?? false
+        self.resolution = try? c.decode(String.self, forKey: .resolution)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, text, owner, dueDate, detectedAt, resolved
+        case id, kind, text, owner, dueDate, detectedAt, resolved, resolution
     }
 }
 
@@ -96,6 +104,7 @@ public actor EventExtractor {
                             "owner": ["type": ["string", "null"]],
                             "due": ["type": ["string", "null"]],
                             "resolved": ["type": "boolean"],
+                            "resolution": ["type": ["string", "null"]],
                         ],
                         "required": ["kind", "text"],
                     ],
@@ -109,10 +118,22 @@ public actor EventExtractor {
         return .json
     }()
 
-    public func extract(from segments: [TranscriptSegment]) async throws -> [MeetingEvent] {
+    /// Extract new events from `segments`, and also let the LLM mark items in
+    /// `openEvents` as resolved when the new fragment contains an answer /
+    /// outcome. Open items the LLM re-emits with `resolved: true` get folded
+    /// into the existing list by `EventMerger` (which keys on kind + text
+    /// prefix). Open items the LLM doesn't re-emit stay open as-is.
+    public func extract(
+        from segments: [TranscriptSegment],
+        openEvents: [MeetingEvent] = []
+    ) async throws -> [MeetingEvent] {
         guard !segments.isEmpty else { return [] }
         let transcript = TranscriptFormatting.toPromptLines(segments)
-        let messages = EventPrompt.extract(transcript: transcript, style: config.style)
+        let messages = EventPrompt.extract(
+            transcript: transcript,
+            openEvents: openEvents,
+            style: config.style
+        )
         // 1200 tokens fits ~10-15 events with owner/due strings comfortably.
         // Each event is short JSON (~50-80 tokens); even noisy meetings rarely
         // exceed this in one delta turn.
@@ -154,7 +175,8 @@ public actor EventExtractor {
                 text: dto.text,
                 owner: (dto.owner?.isEmpty == false) ? dto.owner : nil,
                 dueDate: (dto.due?.isEmpty == false) ? dto.due : nil,
-                resolved: dto.resolved
+                resolved: dto.resolved,
+                resolution: (dto.resolution?.isEmpty == false) ? dto.resolution : nil
             )
         }
     }
@@ -194,54 +216,89 @@ public actor EventExtractor {
 }
 
 enum EventPrompt {
-    static func extract(transcript: String, style: SummaryStyle = .builtin) -> [LLMMessage] {
+    static func extract(
+        transcript: String,
+        openEvents: [MeetingEvent] = [],
+        style: SummaryStyle = .builtin
+    ) -> [LLMMessage] {
         let extra = style.extraEventInstructions.isEmpty
             ? ""
             : "\n\nAdditional user instructions:\n\(style.extraEventInstructions)"
         let system = """
-        You scan meeting transcript fragments and extract structured events.
-        Output JSON only, no prose, no markdown fences.
+        You scan meeting transcript fragments and extract structured events
+        modelled on Notion AI Meeting Notes' Action Items / Decisions /
+        Open Questions / Suggested Topics. Output JSON only, no prose, no
+        markdown fences.
 
         REQUIRED top-level shape — never omit the outer envelope, never return
         a bare event object, never return a bare array:
-        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?,"resolved":boolean}]}
+        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?,"resolved":boolean,"resolution":string?}]}
 
         Kind definitions — be strict, do not guess:
-        - topic: a discussion subject newly raised that has NOT yet become a
-          decision or action. e.g. "pricing strategy is something to think
-          about", "we should talk about onboarding".
-        - question: an explicit unresolved question someone asked
-          (often ends with "?"), still open at the end of this fragment.
-        - decision: an explicit settled conclusion the group agreed on
-          (signaled by "let's go with X", "we decided to X", "OK we'll do X").
-          Tentative discussion does NOT count.
-        - action: a concrete task with a deliverable AND, when stated, an
-          owner / due. e.g. "Alice will draft the proposal by Friday".
-          Vague aspirations like "we should think about X" are topic, not action.
+        - topic: a NEW discussion thread that someone PROPOSED but the group
+          has NOT yet substantively discussed in this fragment or earlier.
+          Use only for forward-looking suggestions like "次回は価格戦略も
+          議論しましょう" / "we should also talk about onboarding later".
+          NEVER use topic for a thread that is already being discussed,
+          already covered in the summary, or already in the OPEN items list
+          below. If a topic was floated and the group immediately dove in,
+          it's no longer a topic — it's a discussion (lives in the summary,
+          not here).
+        - question: a specific, answerable question that is still UNRESOLVED
+          at the end of this fragment (often ends with "?"). One distinct
+          question per event — don't bundle.
+        - decision: an EXPLICIT settled conclusion the group agreed on
+          (signaled by "let's go with X", "we decided to X", "OK we'll do
+          X"). Tentative leanings ("maybe X"), individual opinions, and
+          partial agreement do NOT count.
+        - action: a concrete task with a clear deliverable, ideally with
+          an owner and/or due. "Alice will draft the proposal by Friday".
+          Vague intentions ("we should think about X") are NOT actions.
 
-        Quality rules:
-        - Only include events EXPLICITLY stated in the transcript fragment.
-          Do not infer, do not speculate.
-        - Do NOT duplicate. If a topic / decision was already raised earlier
-          in this fragment, list it only once.
-        - text MUST be concise (≤ 30 words) and self-contained.
-        - Transcript lines look like `[SpeakerLabel] ...` — when a speaker
-          is mentioned alongside a decision / action / question, attribute
-          it with `owner: "<speaker>"` for actions. Don't fabricate owners.
-        - resolved: set to true when a question got an answer in the same
-          fragment, or a topic / action was clearly closed off ("これは
-          見送りで", "じゃあやめます", "解決しました" etc.). Default false.
-          Decisions are reported as resolved=true when restated/confirmed.
+        Quality rules (Notion-style granularity):
+        - Atomic: each event is ONE thing. Split "Aを決め、Bも依頼した" into
+          a decision and an action.
+        - Specific: text must be self-contained and meaningful without the
+          transcript. Bad: "提案について議論". Good: "価格改定の最終案を
+          月末までに提示".
+        - Only include events EXPLICITLY stated. Do not infer, do not
+          speculate, do not summarize the discussion as an event.
+        - Do NOT duplicate within this response.
+        - text MUST be concise (≤ 30 words / 60 chars JP).
+        - Transcript lines look like `[SpeakerLabel] ...`. For actions,
+          attribute via `owner: "<speaker>"` when the speaker is clearly
+          the assignee. Don't fabricate owners; null is fine.
         - Use the same language as the transcript.
         - Even with a single event, wrap it: {"events":[ {…} ]}.
-        - If nothing qualifies, return {"events":[]}.\(extra)
+        - If nothing qualifies, return {"events":[]}.
 
+        Resolution detection (CRITICAL):
+        The OPEN items list below contains questions / topics / actions
+        that were extracted in earlier turns and are still unresolved.
+        If — and ONLY if — the new transcript fragment resolves one of
+        them (an answer is given, an action is reported done, a proposed
+        topic is taken up and concluded, etc.), re-emit that item with:
+          - kind: the SAME kind as the open item
+          - text: copy the open item's text VERBATIM (do not paraphrase,
+            do not translate — the matcher uses prefix equality)
+          - resolved: true
+          - resolution: ≤20-word summary of HOW it was resolved
         Examples:
+          open question "競合分析の期限" + transcript "[A] 金曜までに"
+            → {"kind":"question","text":"競合分析の期限","resolved":true,"resolution":"金曜まで"}
+          open action "提案書をまとめる" + transcript "[B] 提案書送りました"
+            → {"kind":"action","text":"提案書をまとめる","resolved":true,"resolution":"送付済み"}
+        Do NOT re-emit open items that are still unresolved — leave them
+        alone, they stay open automatically. Do NOT mark an item resolved
+        just because the topic was mentioned again; require an actual
+        answer / outcome.\(extra)
+
+        New-event examples:
         Transcript: `[A] じゃあ提案書を来週金曜までにまとめて`
         Output: {"events":[{"kind":"action","text":"提案書をまとめる","owner":"A","due":"来週金曜"}]}
 
-        Transcript: `[Speaker_1] 価格設定をどう考えるかは今後の課題ですね`
-        Output: {"events":[{"kind":"topic","text":"価格設定の方針検討"}]}
+        Transcript: `[Speaker_1] あと次回オンボーディングについても話したいです`
+        Output: {"events":[{"kind":"topic","text":"オンボーディングの方針"}]}
 
         Transcript: `[B] じゃあプランBで行きます`
         Output: {"events":[{"kind":"decision","text":"プランBを採用"}]}
@@ -249,9 +306,37 @@ enum EventPrompt {
         Transcript: `[A] 競合分析はいつまでに必要ですか?`
         Output: {"events":[{"kind":"question","text":"競合分析の期限"}]}
         """
+        let openBlock = renderOpenEvents(openEvents)
+        let user: String = openBlock.isEmpty
+            ? transcript
+            : """
+            ## OPEN items (already extracted; only re-emit if resolved by the new fragment)
+            \(openBlock)
+
+            ## New transcript fragment
+            \(transcript)
+            """
         return [
             .init(role: .system, content: system),
-            .init(role: .user, content: transcript),
+            .init(role: .user, content: user),
         ]
+    }
+
+    /// Compact, model-friendly rendering of the still-open items. We strip
+    /// already-resolved entries so the prompt stays small, and we list each
+    /// item as `- [kind] text (owner: X, due: Y)` — owner/due omitted when
+    /// nil so the noise floor stays low. The LLM matches via verbatim text
+    /// echo, so we don't include synthetic IDs.
+    static func renderOpenEvents(_ events: [MeetingEvent]) -> String {
+        let open = events.filter { !$0.resolved }
+        guard !open.isEmpty else { return "" }
+        return open.map { e in
+            var meta: [String] = []
+            if let owner = e.owner { meta.append("owner: \(owner)") }
+            if let due = e.dueDate { meta.append("due: \(due)") }
+            let metaSuffix = meta.isEmpty ? "" : " (\(meta.joined(separator: ", ")))"
+            return "- [\(e.kind.rawValue)] \(e.text)\(metaSuffix)"
+        }
+        .joined(separator: "\n")
     }
 }
