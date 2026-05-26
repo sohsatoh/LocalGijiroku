@@ -1,7 +1,11 @@
 import Foundation
 
 public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
-    public enum Kind: String, Codable, Sendable {
+    public enum Kind: String, Codable, Sendable, CaseIterable {
+        /// A topic raised or suggested for discussion (not yet a decision /
+        /// action). Surfaced above Actions & Decisions in the UI so the user
+        /// can see what threads the meeting is opening up.
+        case topic
         case question
         case decision
         case action
@@ -49,29 +53,76 @@ public actor EventExtractor {
         self.config = config
     }
 
+    /// JSON Schema that pins Ollama (0.5+) to exactly the envelope our parser
+    /// expects. MLX falls back to prompt-only — schema bytes are unused there.
+    static let responseFormat: LLMResponseFormat = {
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "events": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "kind": [
+                                "type": "string",
+                                "enum": ["topic", "question", "decision", "action"],
+                            ],
+                            "text": ["type": "string"],
+                            "owner": ["type": ["string", "null"]],
+                            "due": ["type": ["string", "null"]],
+                        ],
+                        "required": ["kind", "text"],
+                    ],
+                ],
+            ],
+            "required": ["events"],
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: schema) {
+            return .jsonSchema(data)
+        }
+        return .json
+    }()
+
     public func extract(from segments: [TranscriptSegment]) async throws -> [MeetingEvent] {
         guard !segments.isEmpty else { return [] }
-        let transcript = segments
-            .map { "[\($0.source.rawValue)] \($0.text)" }
-            .joined(separator: "\n")
+        let transcript = TranscriptFormatting.toPromptLines(segments)
         let messages = EventPrompt.extract(transcript: transcript, style: config.style)
-        let response = try await client.chat(model: config.model, messages: messages, format: .json)
-        return try Self.parse(response: response)
+        // 1200 tokens fits ~10-15 events with owner/due strings comfortably.
+        // Each event is short JSON (~50-80 tokens); even noisy meetings rarely
+        // exceed this in one delta turn.
+        let response = try await client.chat(
+            model: config.model,
+            messages: messages,
+            format: Self.responseFormat,
+            maxTokens: 1200
+        )
+        do {
+            return try Self.parse(response: response)
+        } catch {
+            fputs("[EventExtractor] parse FAILED: \(error.localizedDescription)\n", stderr)
+            fputs("[EventExtractor] raw (first 400 chars): \(response.prefix(400))\n", stderr)
+            throw error
+        }
     }
 
     static func parse(response: String) throws -> [MeetingEvent] {
-        struct Wrapper: Decodable {
-            let events: [EventDTO]
-            struct EventDTO: Decodable {
-                let kind: String
-                let text: String
-                let owner: String?
-                let due: String?
-            }
+        if response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw LLMParseError.emptyResponse
         }
-        let json = try SummaryEngine.extractJSONPayload(response)
-        let wrapper = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
-        return wrapper.events.compactMap { dto in
+        guard let jsonString = SummaryEngine.firstBalancedJSONValue(in: response) else {
+            throw LLMParseError.noJSONObject(rawSnippet: LLMParseError.snippet(of: response))
+        }
+        guard let root = try? JSONSerialization.jsonObject(
+            with: Data(jsonString.utf8),
+            options: [.fragmentsAllowed]
+        ) else {
+            throw LLMParseError.jsonDecodeFailed(
+                reason: "not valid JSON",
+                rawSnippet: LLMParseError.snippet(of: jsonString)
+            )
+        }
+        return JSONCoercer.coerceEvents(root).compactMap { dto in
             guard let kind = MeetingEvent.Kind(rawValue: dto.kind.lowercased()) else { return nil }
             return MeetingEvent(
                 kind: kind,
@@ -80,6 +131,39 @@ public actor EventExtractor {
                 dueDate: (dto.due?.isEmpty == false) ? dto.due : nil
             )
         }
+    }
+
+    /// Walks the response looking for the first balanced `[...]` array,
+    /// applying the same string-escape awareness as
+    /// `SummaryEngine.firstBalancedJSONObject` so brackets inside strings
+    /// don't throw off the depth count.
+    static func firstBalancedJSONArray(in s: String) -> String? {
+        let stripped = SummaryEngine.stripThinkBlocks(s)
+        let chars = Array(stripped)
+        guard let start = chars.firstIndex(of: "[") else { return nil }
+        var depth = 0
+        var inString = false
+        var escape = false
+        for i in start..<chars.count {
+            let c = chars[i]
+            if escape { escape = false; continue }
+            if inString {
+                if c == "\\" { escape = true; continue }
+                if c == "\"" { inString = false }
+                continue
+            }
+            switch c {
+            case "\"": inString = true
+            case "[": depth += 1
+            case "]":
+                depth -= 1
+                if depth == 0 {
+                    return String(chars[start...i])
+                }
+            default: break
+            }
+        }
+        return nil
     }
 }
 
@@ -90,15 +174,50 @@ enum EventPrompt {
             : "\n\nAdditional user instructions:\n\(style.extraEventInstructions)"
         let system = """
         You scan meeting transcript fragments and extract structured events.
-        Output JSON only, no prose, no markdown fences:
-        {"events":[{"kind":"question"|"decision"|"action","text":string,"owner":string?,"due":string?}]}
-        Rules:
-        - kind=question: an unresolved question raised in the conversation.
-        - kind=decision: a decision the participants agreed on.
-        - kind=action: a concrete task. Include owner if mentioned, due if mentioned.
-        - Only include events explicitly stated. Do not speculate.
+        Output JSON only, no prose, no markdown fences.
+
+        REQUIRED top-level shape — never omit the outer envelope, never return
+        a bare event object, never return a bare array:
+        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?}]}
+
+        Kind definitions — be strict, do not guess:
+        - topic: a discussion subject newly raised that has NOT yet become a
+          decision or action. e.g. "pricing strategy is something to think
+          about", "we should talk about onboarding".
+        - question: an explicit unresolved question someone asked
+          (often ends with "?"), still open at the end of this fragment.
+        - decision: an explicit settled conclusion the group agreed on
+          (signaled by "let's go with X", "we decided to X", "OK we'll do X").
+          Tentative discussion does NOT count.
+        - action: a concrete task with a deliverable AND, when stated, an
+          owner / due. e.g. "Alice will draft the proposal by Friday".
+          Vague aspirations like "we should think about X" are topic, not action.
+
+        Quality rules:
+        - Only include events EXPLICITLY stated in the transcript fragment.
+          Do not infer, do not speculate.
+        - Do NOT duplicate. If a topic / decision was already raised earlier
+          in this fragment, list it only once.
+        - text MUST be concise (≤ 30 words) and self-contained.
+        - Transcript lines look like `[SpeakerLabel] ...` — when a speaker
+          is mentioned alongside a decision / action / question, attribute
+          it with `owner: "<speaker>"` for actions. Don't fabricate owners.
         - Use the same language as the transcript.
+        - Even with a single event, wrap it: {"events":[ {…} ]}.
         - If nothing qualifies, return {"events":[]}.\(extra)
+
+        Examples:
+        Transcript: `[A] じゃあ提案書を来週金曜までにまとめて`
+        Output: {"events":[{"kind":"action","text":"提案書をまとめる","owner":"A","due":"来週金曜"}]}
+
+        Transcript: `[Speaker_1] 価格設定をどう考えるかは今後の課題ですね`
+        Output: {"events":[{"kind":"topic","text":"価格設定の方針検討"}]}
+
+        Transcript: `[B] じゃあプランBで行きます`
+        Output: {"events":[{"kind":"decision","text":"プランBを採用"}]}
+
+        Transcript: `[A] 競合分析はいつまでに必要ですか?`
+        Output: {"events":[{"kind":"question","text":"競合分析の期限"}]}
         """
         return [
             .init(role: .system, content: system),
