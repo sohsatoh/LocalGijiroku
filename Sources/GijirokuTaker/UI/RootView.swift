@@ -67,12 +67,20 @@ struct RootView: View {
 struct RecordingView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var library: LibraryModel
+    @ObservedObject private var settings = SettingsModel.shared
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            WaveformPanel(mic: model.micWaveform, system: model.systemWaveform)
+            WaveformPanel(
+                mic: model.micWaveform,
+                system: model.systemWaveform,
+                micEnabled: settings.captureMicrophone,
+                systemEnabled: settings.captureSystemAudio,
+                onToggleMic: { model.setMicCaptureEnabled(!settings.captureMicrophone) },
+                onToggleSystem: { model.setSystemCaptureEnabled(!settings.captureSystemAudio) }
+            )
             Divider()
             HSplitView {
                 TranscriptPane(
@@ -108,12 +116,6 @@ struct RecordingView: View {
             if model.diarizationEnabled {
                 diarizationIndicator
             }
-
-            // Live mic / system-audio toggles. Tap mid-recording to mute
-            // a source without stopping the session; tap again to bring
-            // it back. Reflects + updates SettingsModel so the choice
-            // persists into the next session.
-            captureSourceToggles
 
             Spacer()
 
@@ -166,55 +168,6 @@ struct RecordingView: View {
                 .fill((count == 0 ? Color.secondary : Color.accentColor).opacity(0.12))
         )
         .help(L10n.string("recording.diarization_help"))
-    }
-
-    /// Side-by-side mic / system-audio toggle buttons. Tapping flips the
-    /// AudioCaptureEngine's source on/off without stopping the session;
-    /// the chosen state also persists into SettingsModel for next time.
-    private var captureSourceToggles: some View {
-        @ObservedObject var settings = SettingsModel.shared
-        return HStack(spacing: 4) {
-            captureToggleButton(
-                isOn: settings.captureMicrophone,
-                onSymbol: "mic.fill",
-                offSymbol: "mic.slash.fill",
-                tint: .blue,
-                help: "recording.toggle_mic"
-            ) {
-                model.setMicCaptureEnabled(!settings.captureMicrophone)
-            }
-            captureToggleButton(
-                isOn: settings.captureSystemAudio,
-                onSymbol: "speaker.wave.2.fill",
-                offSymbol: "speaker.slash.fill",
-                tint: .green,
-                help: "recording.toggle_system"
-            ) {
-                model.setSystemCaptureEnabled(!settings.captureSystemAudio)
-            }
-        }
-    }
-
-    private func captureToggleButton(
-        isOn: Bool,
-        onSymbol: String,
-        offSymbol: String,
-        tint: Color,
-        help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: isOn ? onSymbol : offSymbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isOn ? tint : Color.secondary)
-                .frame(width: 26, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill((isOn ? tint : Color.secondary).opacity(0.12))
-                )
-        }
-        .buttonStyle(.plain)
-        .help(L10n.string(help))
     }
 }
 

@@ -20,11 +20,31 @@ struct WaveformChannelState: Equatable {
 struct WaveformPanel: View {
     let mic: WaveformChannelState
     let system: WaveformChannelState
+    let micEnabled: Bool
+    let systemEnabled: Bool
+    let onToggleMic: () -> Void
+    let onToggleSystem: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
-            channelRow(symbol: "mic.fill", tint: .blue, state: mic)
-            channelRow(symbol: "speaker.wave.2.fill", tint: .green, state: system)
+            channelRow(
+                onSymbol: "mic.fill",
+                offSymbol: "mic.slash.fill",
+                tint: .blue,
+                state: mic,
+                isEnabled: micEnabled,
+                helpKey: "recording.toggle_mic",
+                onTap: onToggleMic
+            )
+            channelRow(
+                onSymbol: "speaker.wave.2.fill",
+                offSymbol: "speaker.slash.fill",
+                tint: .green,
+                state: system,
+                isEnabled: systemEnabled,
+                helpKey: "recording.toggle_system",
+                onTap: onToggleSystem
+            )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -39,19 +59,38 @@ struct WaveformPanel: View {
         )
     }
 
-    private func channelRow(symbol: String, tint: Color, state: WaveformChannelState) -> some View {
+    /// One channel row. The leading icon doubles as the source on/off
+    /// toggle — clicking flips between `.fill` and `.slash.fill` SF Symbols
+    /// and dims the waveform when off. Saves a separate toolbar control by
+    /// folding the toggle into the existing visual element.
+    private func channelRow(
+        onSymbol: String,
+        offSymbol: String,
+        tint: Color,
+        state: WaveformChannelState,
+        isEnabled: Bool,
+        helpKey: String,
+        onTap: @escaping () -> Void
+    ) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 18)
+            Button(action: onTap) {
+                Image(systemName: isEnabled ? onSymbol : offSymbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isEnabled ? tint : Color.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L10n.string(helpKey))
             WaveformCanvas(history: state.rmsHistory, tint: tint)
                 .frame(height: 32)
                 .frame(maxWidth: .infinity)
+                .opacity(isEnabled ? 1.0 : 0.35)
             Text(dbString(state.currentRMS))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .frame(width: 54, alignment: .trailing)
+                .opacity(isEnabled ? 1.0 : 0.5)
         }
     }
 
