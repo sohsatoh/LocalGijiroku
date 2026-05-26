@@ -173,6 +173,7 @@
 "progress.summarizing_format" = "サマリ生成中 (%d セグメント)";
 "progress.extracting_events_format" = "イベント抽出中 (%d セグメント)";
 "progress.generating_title" = "タイトル生成中…";
+"progress.classifying_project" = "プロジェクト分類中…";
 "progress.done_format" = "完了 %@ (sections=%d events=%d)";
 "progress.failed_format" = "エラー: %@";
 

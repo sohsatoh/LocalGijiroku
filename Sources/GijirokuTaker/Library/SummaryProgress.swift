@@ -11,13 +11,14 @@ enum SummaryProgress: Equatable, Sendable {
     case summarizing(segmentCount: Int)
     case extractingEvents(segmentCount: Int)
     case generatingTitle
+    case classifyingProject
     case done(at: Date, sections: Int, events: Int)
     case failed(message: String)
 
     var isBusy: Bool {
         switch self {
         case .idle, .done, .failed: return false
-        case .modelDownloading, .modelLoading, .summarizing, .extractingEvents, .generatingTitle:
+        case .modelDownloading, .modelLoading, .summarizing, .extractingEvents, .generatingTitle, .classifyingProject:
             return true
         }
     }
@@ -42,6 +43,8 @@ enum SummaryProgress: Equatable, Sendable {
             return L10n.format("progress.extracting_events_format", n)
         case .generatingTitle:
             return L10n.string("progress.generating_title")
+        case .classifyingProject:
+            return L10n.string("progress.classifying_project")
         case .done(let at, let s, let e):
             let f = DateFormatter()
             f.dateFormat = "HH:mm:ss"
