@@ -38,19 +38,29 @@ public struct TranscriptDeduper {
         /// shift segment timestamps by a few seconds, so we accept a wider
         /// window than maxStartTimeDelta is intended for.
         public var crossSourceTimeDelta: TimeInterval
+        /// Bigram-overlap ratio at which a recent entry is treated as
+        /// "subsumed" by the just-merged segment and swept away. Different
+        /// from `similarityThreshold` (Jaccard, symmetric) because
+        /// subsumption is directional: a short "今回高橋総理と面会されまして"
+        /// can be > 70 % subsumed by a long "今回、高市総理と面会されまして、
+        /// どのような話が…" even though their symmetric Jaccard is well
+        /// below 0.7 (the long one drags the union size up).
+        public var subsumptionThreshold: Float
 
         public init(
             lookbackWindow: Int = 8,
             similarityThreshold: Float = 0.7,
             maxStartTimeDelta: TimeInterval = 12,
             crossSourceBleedSuppression: Bool = true,
-            crossSourceTimeDelta: TimeInterval = 6
+            crossSourceTimeDelta: TimeInterval = 6,
+            subsumptionThreshold: Float = 0.7
         ) {
             self.lookbackWindow = lookbackWindow
             self.similarityThreshold = similarityThreshold
             self.maxStartTimeDelta = maxStartTimeDelta
             self.crossSourceBleedSuppression = crossSourceBleedSuppression
             self.crossSourceTimeDelta = crossSourceTimeDelta
+            self.subsumptionThreshold = subsumptionThreshold
         }
     }
 
@@ -118,7 +128,7 @@ public struct TranscriptDeduper {
             return .ignored
         }
 
-        transcript[primaryIdx] = TranscriptSegment(
+        let mergedSegment = TranscriptSegment(
             id: primary.id,
             source: primary.source,
             speaker: incoming.speaker ?? primary.speaker,
@@ -129,20 +139,74 @@ public struct TranscriptDeduper {
             confidence: incoming.confidence ?? primary.confidence,
             isConfirmed: mergedConfirmed
         )
+        transcript[primaryIdx] = mergedSegment
 
-        // Sweep any OTHER recent matches whose text is now fully contained
-        // in the merged result. Only remove on true containment — mere
-        // similarity above the threshold isn't enough justification to
-        // delete an existing entry. Iterate in reverse so the surviving
-        // indices stay valid as we remove.
-        for idx in matchingIndices.reversed() where idx != primaryIdx {
-            let other = transcript[idx]
-            if mergedText.contains(other.text) {
-                transcript.remove(at: idx)
+        // Sweep any OTHER recent entries that are subsumed by the merged
+        // result. Two complementary checks:
+        //   1. Strict substring containment — the obvious case.
+        //   2. Directional bigram overlap ratio ≥ subsumptionThreshold —
+        //      catches the case where Whisper's wording drifts slightly
+        //      between cycles ("高橋総理" → "高市総理", missing 、, etc.),
+        //      so strict containment fails but the older fragment is
+        //      still effectively a less-accurate version of the same
+        //      utterance the merged segment now covers.
+        // The check runs against ALL recent entries (same source +
+        // time-proximate), not just the ones that already passed the
+        // primary similarity threshold — that primary threshold is
+        // symmetric Jaccard, which under-counts when the merged is much
+        // longer than the existing fragment.
+        let mergedBigrams = Self.charBigrams(of: mergedText)
+        for i in stride(from: transcript.count - 1, through: lookbackStart, by: -1) where i != primaryIdx {
+            let other = transcript[i]
+            guard other.source == mergedSegment.source else { continue }
+            let timeDelta = abs(other.startTime.timeIntervalSince(mergedSegment.startTime))
+            guard timeDelta <= config.maxStartTimeDelta else { continue }
+            // Don't sweep confirmed entries with an unconfirmed merge —
+            // shouldn't happen in the current model (unconfirmed never
+            // enters transcript) but the guard is cheap insurance.
+            if other.isConfirmed && !mergedSegment.isConfirmed { continue }
+            if Self.isSubsumed(otherText: other.text, mergedText: mergedText, mergedBigrams: mergedBigrams, threshold: config.subsumptionThreshold) {
+                transcript.remove(at: i)
             }
         }
 
         return .replaced(previousID: primary.id)
+    }
+
+    /// Directional subsumption test: "is `otherText` mostly inside the
+    /// merged result, even allowing for small wording drift?". True when
+    /// either the merged text strictly contains the other, or when ≥
+    /// `threshold` of the other's character bigrams appear in the
+    /// merged text. Uses CHAR bigrams (not the symmetric-similarity
+    /// `tokens`) so that whole-string tokens — which inflate the denom
+    /// for any space-free CJK text — don't pull the ratio under the
+    /// threshold for what is plainly a refinement of the same utterance.
+    static func isSubsumed(
+        otherText: String,
+        mergedText: String,
+        mergedBigrams: Set<String>,
+        threshold: Float
+    ) -> Bool {
+        if mergedText.contains(otherText) { return true }
+        let otherBigrams = Self.charBigrams(of: otherText)
+        guard !otherBigrams.isEmpty else { return false }
+        let inter = otherBigrams.intersection(mergedBigrams).count
+        return Float(inter) / Float(otherBigrams.count) >= threshold
+    }
+
+    /// Character bigram signature — used by the subsumption sweep. Kept
+    /// separate from `tokens` so the symmetric similarity check can
+    /// continue to mix whitespace-split words + char bigrams for its
+    /// purpose (matching short utterances cross-cycle).
+    static func charBigrams(of s: String) -> Set<String> {
+        let chars = Array(s)
+        guard chars.count >= 2 else { return [] }
+        var set: Set<String> = []
+        set.reserveCapacity(chars.count - 1)
+        for i in 0..<(chars.count - 1) {
+            set.insert(String(chars[i...(i + 1)]))
+        }
+        return set
     }
 
     /// Cross-source bleed handler: if `incoming` (mic) has similar text to a

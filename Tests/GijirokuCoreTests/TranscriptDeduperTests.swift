@@ -135,6 +135,54 @@ import Foundation
     #expect(transcript[1].text == "ところで会議は午後3時から。早めに集合しましょう。")
 }
 
+@Test func sweepRemovesEarlierMisheardCyclesByBigramOverlap() {
+    // Real-world failure mode: Whisper iterates on the same audio across
+    // multiple cycles, slowly refining a misheard word and growing the
+    // sentence. Each emission is a separate entry until the final
+    // combined version arrives. Strict substring containment wouldn't
+    // catch the early "高橋総理" (misheard) version because the final
+    // says "高市総理" and adds 、. The bigram-overlap sweep does.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript: [TranscriptSegment] = [
+        TranscriptSegment(source: .system, text: "今回高橋総理と面会されまして", startTime: now, endTime: now.addingTimeInterval(3), isFinal: true),
+        TranscriptSegment(source: .system, text: "今回高市総理と面会されましたけど", startTime: now.addingTimeInterval(1), endTime: now.addingTimeInterval(4), isFinal: true),
+        TranscriptSegment(source: .system, text: "どのような話が相変わらされたのかお聞かせください", startTime: now.addingTimeInterval(4), endTime: now.addingTimeInterval(8), isFinal: true),
+    ]
+    let final = TranscriptSegment(
+        source: .system,
+        text: "今回、高市総理と面会されまして、どのような話が相変わらされたのかお聞かせください。",
+        startTime: now,
+        endTime: now.addingTimeInterval(8),
+        isFinal: true
+    )
+    _ = deduper.merge(final, into: &transcript)
+    #expect(transcript.count == 1)
+    #expect(transcript[0].text == "今回、高市総理と面会されまして、どのような話が相変わらされたのかお聞かせください。")
+}
+
+@Test func sweepDoesNotRemoveUnrelatedShortSegment() {
+    // Two short utterances next to a long merge that doesn't subsume
+    // either. They have low bigram overlap with the merge → keep them.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript: [TranscriptSegment] = [
+        TranscriptSegment(source: .microphone, text: "おはようございます", startTime: now, endTime: now.addingTimeInterval(2), isFinal: true),
+        TranscriptSegment(source: .microphone, text: "今日もよろしくお願いします", startTime: now.addingTimeInterval(2), endTime: now.addingTimeInterval(4), isFinal: true),
+    ]
+    let unrelatedRefinement = TranscriptSegment(
+        source: .microphone,
+        text: "予算について議論を続けましょう、まず売上の話から。",
+        startTime: now.addingTimeInterval(4),
+        endTime: now.addingTimeInterval(10),
+        isFinal: true
+    )
+    _ = deduper.merge(unrelatedRefinement, into: &transcript)
+    #expect(transcript.count == 3)
+    #expect(transcript[0].text == "おはようございます")
+    #expect(transcript[1].text == "今日もよろしくお願いします")
+}
+
 @Test func sweepCollapsesThreeFragmentsIntoOne() {
     // Stress case: three earlier fragments all subsumed by a single
     // late-cycle combined emission. The deduper picks the newest as the
