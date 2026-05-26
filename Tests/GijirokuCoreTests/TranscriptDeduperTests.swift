@@ -135,6 +135,121 @@ import Foundation
     #expect(transcript[1].text == "ところで会議は午後3時から。早めに集合しましょう。")
 }
 
+// MARK: - Directional refinement matches
+
+@Test func mergesNameRefinementWithExtraSyllable() {
+    // Real-world: cycle N emits "日程 新山貴です" (Whisper truncated the
+    // surname), cycle N+1 refines to "日程 新山貴樹です". Symmetric
+    // Jaccard between these is < 0.7 (the union picks up the extra
+    // bigram), so the old code left both as separate rows. Directional
+    // containment notes the shorter's bigrams are ≥ 70 % covered by
+    // the longer and merges.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript = [TranscriptSegment(
+        source: .system,
+        text: "日程 新山貴です",
+        startTime: now,
+        endTime: now.addingTimeInterval(2),
+        isFinal: true
+    )]
+    _ = deduper.merge(
+        TranscriptSegment(
+            source: .system,
+            text: "日程 新山貴樹です",
+            startTime: now,
+            endTime: now.addingTimeInterval(2.5),
+            isFinal: true
+        ),
+        into: &transcript
+    )
+    #expect(transcript.count == 1)
+    #expect(transcript[0].text == "日程 新山貴樹です")
+}
+
+@Test func mergesNumericRefinementInLongSentence() {
+    // Real-world: "10年ぶりに1、6月期ですけれども" → "1年ぶりに1、6月期ですけれども、".
+    // One char difference + trailing 、. Symmetric Jaccard dips below
+    // 0.7; directional containment sits at ~0.875.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript = [TranscriptSegment(
+        source: .system,
+        text: "10年ぶりに1、6月期ですけれども",
+        startTime: now,
+        endTime: now.addingTimeInterval(3),
+        isFinal: true
+    )]
+    _ = deduper.merge(
+        TranscriptSegment(
+            source: .system,
+            text: "1年ぶりに1、6月期ですけれども、",
+            startTime: now.addingTimeInterval(0.5),
+            endTime: now.addingTimeInterval(3.5),
+            isFinal: true
+        ),
+        into: &transcript
+    )
+    #expect(transcript.count == 1)
+    #expect(transcript[0].text == "1年ぶりに1、6月期ですけれども、")
+}
+
+@Test func mergesPartialContinuationOfPriorSentence() {
+    // Real-world: "私の方からご説明させていただいたのは" emitted in cycle
+    // N, then "させていただいたのは、" emitted next cycle. The shorter
+    // is fully a tail of the longer (plus a trailing 、). Directional
+    // containment sees the smaller (9 bigrams) is ~89 % covered.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript = [TranscriptSegment(
+        source: .microphone,
+        text: "私の方からご説明させていただいたのは",
+        startTime: now,
+        endTime: now.addingTimeInterval(4),
+        isFinal: true
+    )]
+    _ = deduper.merge(
+        TranscriptSegment(
+            source: .microphone,
+            text: "させていただいたのは、",
+            startTime: now.addingTimeInterval(2),
+            endTime: now.addingTimeInterval(4.5),
+            isFinal: true
+        ),
+        into: &transcript
+    )
+    #expect(transcript.count == 1)
+    // The longer text wins — preserves the upstream context.
+    #expect(transcript[0].text == "私の方からご説明させていただいたのは")
+}
+
+@Test func directionalFloorIgnoresTrivialBigramMatchWithDistinctText() {
+    // Guard against false positives from the directional rule on very
+    // short texts. The shorter side has < 3 bigrams here, so mergeSignal
+    // falls back to symmetric similarity only — and the two segments
+    // share neither a substring nor enough tokens to trip the threshold.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript = [TranscriptSegment(
+        source: .microphone,
+        text: "了解",
+        startTime: now,
+        endTime: now.addingTimeInterval(1),
+        isFinal: true
+    )]
+    _ = deduper.merge(
+        TranscriptSegment(
+            source: .microphone,
+            text: "明日の予算会議について議論しましょう",
+            startTime: now.addingTimeInterval(5),
+            endTime: now.addingTimeInterval(11),
+            isFinal: true
+        ),
+        into: &transcript
+    )
+    #expect(transcript.count == 2)
+}
+
 @Test func sweepRemovesEarlierMisheardCyclesByBigramOverlap() {
     // Real-world failure mode: Whisper iterates on the same audio across
     // multiple cycles, slowly refining a misheard word and growing the

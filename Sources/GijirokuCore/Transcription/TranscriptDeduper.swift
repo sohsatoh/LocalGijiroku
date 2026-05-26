@@ -85,6 +85,19 @@ public struct TranscriptDeduper {
         // match, the combined incoming would replace one slot but leave
         // the other as a duplicate fragment. Sweeping all matches lets us
         // collapse subsumed entries in the same pass.
+        //
+        // Match check is `mergeSignal` — symmetric Jaccard OR directional
+        // bigram containment, whichever is higher. The directional half
+        // catches the asymmetric-refinement case symmetric similarity used
+        // to miss: when Whisper re-emits a short utterance as a slightly
+        // longer / slightly different one ("日程 新山貴です" →
+        // "日程 新山貴樹です", "10年ぶり…" → "1年ぶり…"), symmetric
+        // Jaccard sinks below 0.7 because the union inflates with the
+        // longer side's unique bigrams, but the shorter side's bigrams
+        // are still ≥ 70 % present in the longer side. Without this the
+        // user kept seeing two near-duplicate rows because primary match
+        // missed, and the post-merge sweep never ran.
+        let incomingBigrams = Self.charBigrams(of: incoming.text)
         let lookbackStart = max(0, transcript.count - config.lookbackWindow)
         var matchingIndices: [Int] = []
         for i in lookbackStart..<transcript.count {
@@ -92,8 +105,12 @@ public struct TranscriptDeduper {
             guard existing.source == incoming.source else { continue }
             let timeDelta = abs(existing.startTime.timeIntervalSince(incoming.startTime))
             guard timeDelta <= config.maxStartTimeDelta else { continue }
-            let sim = Self.similarity(existing.text, incoming.text)
-            guard sim >= config.similarityThreshold else { continue }
+            let signal = Self.mergeSignal(
+                existing: existing.text,
+                incoming: incoming.text,
+                incomingBigrams: incomingBigrams
+            )
+            guard signal >= config.similarityThreshold else { continue }
             matchingIndices.append(i)
         }
 
@@ -192,6 +209,37 @@ public struct TranscriptDeduper {
         guard !otherBigrams.isEmpty else { return false }
         let inter = otherBigrams.intersection(mergedBigrams).count
         return Float(inter) / Float(otherBigrams.count) >= threshold
+    }
+
+    /// Merge-eligibility signal between an existing transcript entry and
+    /// an incoming segment. Combines two views into one ratio:
+    ///   - **symmetric Jaccard** via `similarity(_:_:)`, which already
+    ///     short-circuits to 1.0 on strict substring containment and is
+    ///     well-tuned for short utterances of comparable length;
+    ///   - **directional bigram containment** — what fraction of the
+    ///     SHORTER side's bigrams appear in the longer side. Catches the
+    ///     asymmetric-refinement case (short fragment refined into a
+    ///     longer / slightly different sentence) symmetric similarity
+    ///     misses because the union inflates with the long side's unique
+    ///     bigrams.
+    /// Returns the max of the two so any signal high enough triggers a
+    /// merge. The min-bigram-count gate (`shorter ≥ 3`) prevents
+    /// 1-bigram trivial matches like "今日" matching every long sentence
+    /// containing "今日" — the time-delta gate at the call site does
+    /// most of that work, but the bigram floor is cheap insurance.
+    static func mergeSignal(
+        existing: String,
+        incoming: String,
+        incomingBigrams: Set<String>?
+    ) -> Float {
+        let sym = Self.similarity(existing, incoming)
+        let existingBigrams = Self.charBigrams(of: existing)
+        let incomingBigrams = incomingBigrams ?? Self.charBigrams(of: incoming)
+        let smaller = min(existingBigrams.count, incomingBigrams.count)
+        guard smaller >= 3 else { return sym }
+        let inter = existingBigrams.intersection(incomingBigrams).count
+        let directional = Float(inter) / Float(smaller)
+        return max(sym, directional)
     }
 
     /// Character bigram signature — used by the subsumption sweep. Kept
