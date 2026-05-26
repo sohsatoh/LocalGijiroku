@@ -83,32 +83,6 @@ public struct FileSessionStore: SessionStore {
     }
 
     public func exportMarkdown(_ session: Session) -> String {
-        var out = "# \(session.title)\n\n"
-        out += "_\(ISO8601DateFormatter().string(from: session.startedAt))_\n\n"
-
-        out += "## Summary\n\n"
-        for section in session.summary.sections {
-            out += "### \(section.title)\n"
-            for bullet in section.bullets {
-                out += "- \(bullet)\n"
-            }
-            out += "\n"
-        }
-
-        if !session.events.isEmpty {
-            out += "## Events\n\n"
-            for event in session.events {
-                let owner = event.owner.map { " (@\($0))" } ?? ""
-                let due = event.dueDate.map { " — due \($0)" } ?? ""
-                out += "- [\(event.kind.rawValue)] \(event.text)\(owner)\(due)\n"
-            }
-            out += "\n"
-        }
-
-        out += "## Transcript\n\n"
-        for seg in session.transcript {
-            out += "- [\(seg.source.rawValue)] \(seg.text)\n"
-        }
-        return out
+        MarkdownExporter.render(session, style: session.summaryStyle ?? .builtin)
     }
 }

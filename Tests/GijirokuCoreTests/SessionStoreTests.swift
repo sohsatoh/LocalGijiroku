@@ -49,23 +49,34 @@ private func tempDir() -> URL {
     #expect(rows[1].title == "Older")
 }
 
-@Test func exportMarkdownIncludesAllSections() {
+@Test func exportMarkdownIncludesSummaryAndTaskSections() {
     let store = FileSessionStore(directory: tempDir())
     let session = Session(
         title: "Demo",
         transcript: [.init(source: .system, text: "hi", startTime: .now, endTime: .now, isFinal: true)],
         summary: CumulativeSummary(sections: [.init(title: "Topic", bullets: ["point a"])]),
-        events: [.init(kind: .question, text: "what?")]
+        events: [
+            .init(kind: .question, text: "what?"),
+            .init(kind: .action, text: "ship it", owner: "alice", dueDate: "2026-06-01"),
+            .init(kind: .decision, text: "go ahead"),
+        ]
     )
     let md = store.exportMarkdown(session)
     #expect(md.contains("# Demo"))
     #expect(md.contains("## Summary"))
     #expect(md.contains("### Topic"))
     #expect(md.contains("- point a"))
-    #expect(md.contains("## Events"))
+    #expect(md.contains("## Action Items"))
+    #expect(md.contains("ship it"))
+    #expect(md.contains("(@alice)"))
+    #expect(md.contains("due 2026-06-01"))
+    #expect(md.contains("## Decisions"))
+    #expect(md.contains("go ahead"))
+    #expect(md.contains("## Questions"))
     #expect(md.contains("what?"))
-    #expect(md.contains("## Transcript"))
-    #expect(md.contains("[system] hi"))
+    // Transcript is NOT included by default — keeps shared notes concise.
+    #expect(!md.contains("## Transcript"))
+    #expect(!md.contains("[system] hi"))
 }
 
 @Test func loadReturnsNilForMissingSession() throws {

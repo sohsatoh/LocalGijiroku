@@ -54,6 +54,22 @@ struct StyleEditor: View {
                 stepper(L10n.string("style.section_cap_label"), value: $style.maxSections, range: 0...20, zeroLabel: L10n.string("style.unlimited_zero"))
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text(loc: "style.export_template_label")
+                    .font(.subheadline)
+                TextEditor(text: $style.exportTemplate)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(height: 120)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.secondary.opacity(0.3))
+                    )
+                Text(loc: "style.export_template_example")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Text(loc: "style.inherit_caption")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
