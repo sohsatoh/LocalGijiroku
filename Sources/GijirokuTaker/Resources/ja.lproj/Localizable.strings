@@ -193,6 +193,8 @@
 
 /* === Meeting title default === */
 "meeting.default_title" = "ミーティング";
+"meeting.in_progress_title" = "録音中（自動保存）";
+"meeting.recovered_prefix" = "[復元] ";
 
 /* === Model tags (shown next to picker entries) === */
 "model.tag.lightweight" = "軽量";

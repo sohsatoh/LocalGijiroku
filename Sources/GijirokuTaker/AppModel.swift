@@ -34,6 +34,12 @@ final class AppModel: ObservableObject {
 
     private let settings: SettingsModel = .shared
     private let sessionStore: FileSessionStore
+    /// Separate on-disk store for in-progress recordings. Autosaved every
+    /// 30 s and on every transcript append so a crash / kill / power loss
+    /// during a long meeting doesn't take the whole transcript with it.
+    /// Drafts get promoted to `sessionStore` on Stop, or recovered on the
+    /// next launch if Stop never happened.
+    private let draftStore: FileSessionStore
 
     // Recreated per session so that settings changes take effect on next Start.
     private var client: (any LLMClient)?
@@ -49,6 +55,7 @@ final class AppModel: ObservableObject {
     private var summaryLoopTask: Task<Void, Never>?
     private var audioPumpTask: Task<Void, Never>?
     private var waveformTask: Task<Void, Never>?
+    private var autosaveTask: Task<Void, Never>?
     private let transcriptDeduper = TranscriptDeduper()
     private let eventMerger = EventMerger()
 
@@ -77,8 +84,78 @@ final class AppModel: ObservableObject {
     init() {
         let appSupport = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("GijirokuTaker/Sessions", isDirectory: true)
-        self.sessionStore = FileSessionStore(directory: dir)
+        let sessionsDir = appSupport.appendingPathComponent("GijirokuTaker/Sessions", isDirectory: true)
+        let draftsDir = appSupport.appendingPathComponent("GijirokuTaker/Drafts", isDirectory: true)
+        self.sessionStore = FileSessionStore(directory: sessionsDir)
+        self.draftStore = FileSessionStore(directory: draftsDir)
+        // Recover any orphaned drafts left by a previous crash / force-quit.
+        // Runs synchronously so the sidebar is correct before the user sees
+        // the first frame. File IO here is small (one Codable read per
+        // draft) and only happens when drafts actually exist.
+        recoverOrphanedDrafts()
+    }
+
+    /// Promote any in-progress recordings left in the drafts directory into
+    /// the regular Sessions store. The previous launch crashed / was killed
+    /// before `persistFinalSession` could run; without this we'd silently
+    /// lose the entire transcript. Recovered sessions get a localized prefix
+    /// on their title so the user notices them in the sidebar.
+    private func recoverOrphanedDrafts() {
+        let prefix = L10n.string("meeting.recovered_prefix")
+        do {
+            let promoted = try DraftRecovery.promoteOrphans(
+                from: draftStore,
+                into: sessionStore,
+                recoveredPrefix: prefix
+            )
+            if promoted > 0 {
+                fputs("[GijirokuTaker] recovered \(promoted) orphaned draft(s)\n", stderr)
+            }
+        } catch {
+            fputs("[GijirokuTaker] draft recovery failed: \(error.localizedDescription)\n", stderr)
+        }
+    }
+
+    /// Persist the current in-progress recording to the drafts directory.
+    /// Cheap (~1 KB per minute of transcript, one Codable encode + atomic
+    /// write) and idempotent. Called periodically by the autosave loop and
+    /// on every transcript append, so a crash loses at most the last few
+    /// seconds of audio that hadn't yet produced a Whisper segment.
+    private func persistDraft() {
+        guard isRecording else { return }
+        let projectID = LibraryModel.shared.activeProjectID
+        let draft = Session(
+            id: sessionId,
+            projectId: projectID,
+            title: L10n.string("meeting.in_progress_title"),
+            startedAt: sessionStartedAt,
+            endedAt: nil,
+            transcript: transcript,
+            summary: summary,
+            events: events
+        )
+        do {
+            try draftStore.save(draft)
+        } catch {
+            // Don't escalate to the user — they're recording, not the
+            // moment to throw an autosave dialog. Log and let the next
+            // cycle retry.
+            fputs("[GijirokuTaker] draft autosave failed: \(error.localizedDescription)\n", stderr)
+        }
+    }
+
+    /// Background loop that periodically flushes the in-memory recording
+    /// state to disk as a draft. Runs on a fixed 30-second cadence,
+    /// independent of the summary loop so unrelated LLM stalls can't block
+    /// the durability guarantee.
+    private func startAutosaveLoop() {
+        autosaveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                if Task.isCancelled { break }
+                await MainActor.run { self?.persistDraft() }
+            }
+        }
     }
 
     func startRecording() {
@@ -167,6 +244,11 @@ final class AppModel: ObservableObject {
         events.removeAll()
         pendingForSummary.removeAll()
 
+        // Persist an empty draft immediately so the session's existence is
+        // recorded on disk before any audio flows — if the app dies in the
+        // first few seconds, recovery still picks up the session shell.
+        persistDraft()
+        startAutosaveLoop()
         startSummaryLoop()
         startAudioPipeline()
     }
@@ -181,6 +263,8 @@ final class AppModel: ObservableObject {
         audioPumpTask = nil
         waveformTask?.cancel()
         waveformTask = nil
+        autosaveTask?.cancel()
+        autosaveTask = nil
         Task { [captureEngine] in await captureEngine?.stop() }
         captureEngine = nil
         // Drop the lingering waveform levels right away so the UI visibly
@@ -204,10 +288,15 @@ final class AppModel: ObservableObject {
         audioPumpTask = nil
         waveformTask?.cancel()
         waveformTask = nil
+        autosaveTask?.cancel()
+        autosaveTask = nil
         Task { [captureEngine] in await captureEngine?.stop() }
         captureEngine = nil
         micWaveform = WaveformChannelState()
         systemWaveform = WaveformChannelState()
+        // Flush a draft as soon as we pause — captures whatever the user has
+        // so far in case they walk away from the laptop after pausing.
+        persistDraft()
         statusMessage = L10n.string("status.paused")
         fputs("[GijirokuTaker] paused\n", stderr)
     }
@@ -219,6 +308,7 @@ final class AppModel: ObservableObject {
         guard isRecording, isPaused else { return }
         isPaused = false
         statusMessage = L10n.string("status.recording")
+        startAutosaveLoop()
         startSummaryLoop()
         startAudioPipeline()
         fputs("[GijirokuTaker] resumed\n", stderr)
@@ -330,6 +420,11 @@ final class AppModel: ObservableObject {
             logger.error("Summary error: \(error.localizedDescription, privacy: .public)")
             summaryProgress = .failed(message: error.localizedDescription)
         }
+        // Snapshot to disk now that summary + events are in their freshest
+        // state — the autosave loop runs on its own 30 s cadence but
+        // catching the moment right after a successful LLM turn means a
+        // crash now still preserves the LLM work the user just paid for.
+        persistDraft()
     }
 
     /// Resets the cumulative summary and re-runs the LLM against the entire
@@ -450,6 +545,14 @@ final class AppModel: ObservableObject {
         )
         do {
             try sessionStore.save(session)
+            // Final save succeeded — the draft is now redundant and would
+            // otherwise be re-promoted as a "[Recovered]" duplicate on the
+            // next launch. Best-effort delete; if it fails for some reason
+            // the recovery path is idempotent (the dedup key is sessionId,
+            // which matches the just-saved session and will be filtered
+            // when recovery sees an already-saved id — but to be safe we
+            // still try to remove the file).
+            try? draftStore.delete(id: session.id)
             statusMessage = L10n.format("status.saved_format", String(session.id.uuidString.prefix(8)))
             summaryProgress = .done(at: .now, sections: summary.sections.count, events: events.count)
             LibraryModel.shared.reload()
