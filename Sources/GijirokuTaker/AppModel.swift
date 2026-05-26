@@ -249,21 +249,12 @@ final class AppModel: ObservableObject {
         self.eventExtractor = eventExtractor
 
         let whisperLang = (whisperLangRaw == "auto") ? nil : whisperLangRaw
-        // The transcript layout setting also drives engine streaming mode:
-        // rows = non-streaming (5 s polling, every segment immediately
-        // confirmed) so the UI matches the pre-6442967 behaviour the layout
-        // was originally designed for; turns = streaming (2 s polling, last
-        // N segments held as the unconfirmed rolling tail) so the live
-        // tail can flow inline in the Notion-style block.
-        let streaming = settings.transcriptLayoutMode == .turns
         let transcription = WhisperTranscription(
             config: .init(
                 modelName: settings.whisperModel,
                 language: whisperLang ?? "ja",
-                inferenceInterval: streaming ? 2 : 5,
                 diarizationEnabled: settings.diarizationEnabled,
-                vadEnabled: settings.vadEnabled,
-                requiredSegmentsForConfirmation: streaming ? 2 : 0
+                vadEnabled: settings.vadEnabled
             )
         )
         self.transcriptionEngine = transcription
