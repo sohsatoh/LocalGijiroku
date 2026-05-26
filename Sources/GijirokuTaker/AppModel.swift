@@ -304,7 +304,12 @@ final class AppModel: ObservableObject {
         do {
             // 直列に呼ぶ: 同じ LLM client を使うので並列化しても結局逐次実行になり、
             // むしろ進捗を 1 ステップずつ正確に出せる方が UX が良い。
-            let updatedSummary = try await summaryEngine.ingest(newSegments: segments)
+            // Append-only delta: the LLM sees only the existing section
+            // TITLES + the new transcript fragment and returns just the
+            // bullets to add. Keeps per-turn cost roughly constant — Stop
+            // runs a full-pass regenerate that polishes the final saved
+            // summary.
+            let updatedSummary = try await summaryEngine.appendDelta(newSegments: segments)
             summaryProgress = .extractingEvents(segmentCount: segments.count)
             // Pass the current still-open events so the LLM can mark them
             // resolved when the new fragment contains an answer / outcome.
@@ -341,13 +346,16 @@ final class AppModel: ObservableObject {
         guard let summaryEngine, let eventExtractor else { return }
         let segments = transcript
         logger.info("regenerateSummary: full transcript \(segments.count, privacy: .public) segments")
-        await summaryEngine.reset()
         summary = CumulativeSummary()
         events.removeAll()
         pendingForSummary.removeAll()
         summaryProgress = .summarizing(segmentCount: segments.count)
         do {
-            let updatedSummary = try await summaryEngine.ingest(newSegments: segments)
+            // Full-pass regenerate: the engine drops the accumulated
+            // delta-built summary and produces a fresh one-shot summary
+            // over the entire transcript. Same path Stop / the saved-
+            // session "Re-summarize" button take.
+            let updatedSummary = try await summaryEngine.regenerate(transcript: segments)
             summaryProgress = .extractingEvents(segmentCount: segments.count)
             let newEvents = try await eventExtractor.extract(from: segments)
             summary = updatedSummary
@@ -414,6 +422,19 @@ final class AppModel: ObservableObject {
 
     private func persistFinalSession() async {
         await flushSummaryWindow()
+        // Replace the delta-built running summary with a fresh full-pass
+        // summary over the entire transcript. The recording-time deltas
+        // are cheap but only see one window at a time; the full pass can
+        // restructure / merge / promote bullets across the whole meeting
+        // so the saved artifact is the polished Notion-style output.
+        if let summaryEngine, !transcript.isEmpty {
+            summaryProgress = .summarizing(segmentCount: transcript.count)
+            do {
+                summary = try await summaryEngine.regenerate(transcript: transcript)
+            } catch {
+                logger.error("Final regenerate failed (keeping delta summary): \(error.localizedDescription, privacy: .public)")
+            }
+        }
         summaryProgress = .generatingTitle
         let title = await generateTitle()
         let projectID = LibraryModel.shared.activeProjectID

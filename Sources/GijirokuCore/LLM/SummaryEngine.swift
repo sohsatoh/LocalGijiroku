@@ -1,6 +1,19 @@
 import Foundation
 import os.log
 
+/// One batch of new bullets that the LLM wants to add to a single section.
+/// `section` may match an existing section title (append) or be new
+/// (create-and-append).
+public struct SummaryUpdate: Codable, Sendable, Equatable {
+    public let section: String
+    public let bullets: [String]
+
+    public init(section: String, bullets: [String]) {
+        self.section = section
+        self.bullets = bullets
+    }
+}
+
 public struct CumulativeSummary: Codable, Sendable, Equatable {
     public var sections: [Section]
     public var lastUpdated: Date
@@ -82,39 +95,164 @@ public actor SummaryEngine {
         return .json
     }()
 
-    public func ingest(newSegments: [TranscriptSegment]) async throws -> CumulativeSummary {
+    /// JSON Schema for the append-only delta call. The LLM emits only NEW
+    /// bullets per section, not the full updated summary — so per-turn token
+    /// cost stays roughly constant regardless of how long the meeting has
+    /// been running.
+    static let updatesResponseFormat: LLMResponseFormat = {
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "updates": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "section": ["type": "string"],
+                            "bullets": [
+                                "type": "array",
+                                "items": ["type": "string"],
+                            ],
+                        ],
+                        "required": ["section", "bullets"],
+                    ],
+                ],
+            ],
+            "required": ["updates"],
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: schema) {
+            return .jsonSchema(data)
+        }
+        return .json
+    }()
+
+    /// Incremental, append-only summary update. Used during live recording.
+    /// The LLM sees only the existing section TITLES + the new transcript
+    /// fragment and returns just the bullets to add — never re-emits or
+    /// rewrites existing bullets. Per-turn cost stays roughly constant so
+    /// 60-minute recordings don't drown the summary loop.
+    ///
+    /// The full-summary pass that runs on Stop (`regenerate(transcript:)`)
+    /// is what produces the polished final output; this method is only
+    /// responsible for keeping the in-progress UI moving cheaply.
+    public func appendDelta(newSegments: [TranscriptSegment]) async throws -> CumulativeSummary {
         guard !newSegments.isEmpty else { return current }
-        fputs("[SummaryEngine] ingest called segments=\(newSegments.count)\n", stderr)
+        fputs("[SummaryEngine] appendDelta segments=\(newSegments.count) existingSections=\(current.sections.count)\n", stderr)
         let delta = TranscriptFormatting.toPromptLines(newSegments)
-        let messages = SummaryPrompt.update(
-            existing: current,
+        let messages = SummaryPrompt.appendDelta(
+            existingSectionTitles: current.sections.map(\.title),
             transcriptDelta: delta,
             language: config.language,
             style: config.style
         )
-        fputs("[SummaryEngine] calling client.chat model=\(config.model) messages=\(messages.count)\n", stderr)
-        // 1500 tokens is enough for ~6 sections × ~4 bullets in JP/EN —
-        // matches our prompt's section cap. If the user lifts the cap via
-        // SummaryStyle this may truncate; revisit then.
+        // 600 tokens is enough for a single turn's worth of new bullets
+        // (typically 1-3 sections × 1-3 bullets each). Tight cap = fast
+        // turn-around even on small local models.
+        let response = try await client.chat(
+            model: config.model,
+            messages: messages,
+            format: Self.updatesResponseFormat,
+            maxTokens: 600
+        )
+        fputs("[SummaryEngine] appendDelta response length=\(response.count)\n", stderr)
+        do {
+            let updates = try Self.parseUpdates(response: response)
+            current = Self.applyUpdates(updates, to: current)
+            return current
+        } catch {
+            fputs("[SummaryEngine] appendDelta parse FAILED: \(error.localizedDescription)\n", stderr)
+            fputs("[SummaryEngine] raw (first 400 chars): \(response.prefix(400))\n", stderr)
+            throw error
+        }
+    }
+
+    /// Fresh full-pass summary over the entire transcript. Resets internal
+    /// state, then asks the LLM for a complete structured summary in one
+    /// shot. Used:
+    ///   - automatically on Stop, so the saved summary is the high-quality
+    ///     one-shot version rather than the accumulation of cheap deltas;
+    ///   - by the user-initiated "Re-summarize" button on saved sessions
+    ///     (LibraryModel.regenerateSummary).
+    public func regenerate(transcript: [TranscriptSegment]) async throws -> CumulativeSummary {
+        current = CumulativeSummary()
+        guard !transcript.isEmpty else { return current }
+        fputs("[SummaryEngine] regenerate segments=\(transcript.count)\n", stderr)
+        let body = TranscriptFormatting.toPromptLines(transcript)
+        let messages = SummaryPrompt.fullPass(
+            transcript: body,
+            language: config.language,
+            style: config.style
+        )
+        // 2000 tokens fits a polished full summary (8 sections × 5 bullets)
+        // for an hour-long meeting. Capped to keep the Stop-to-save wait
+        // bounded; truncation surfaces as a parse error which the caller
+        // handles by retaining the in-progress summary.
         let response = try await client.chat(
             model: config.model,
             messages: messages,
             format: Self.responseFormat,
-            maxTokens: 1500
+            maxTokens: 2000
         )
-        fputs("[SummaryEngine] got response length=\(response.count)\n", stderr)
         do {
-            let updated = try Self.parse(response: response)
-            current = updated
-            return updated
+            let parsed = try Self.parse(response: response)
+            current = parsed
+            return parsed
         } catch {
-            // Surface the raw response in the log so the developer / user can
-            // see exactly what the LLM emitted when parsing fails. Without
-            // this, "LLMParseError error 0" is uninformative.
-            fputs("[SummaryEngine] parse FAILED: \(error.localizedDescription)\n", stderr)
+            fputs("[SummaryEngine] regenerate parse FAILED: \(error.localizedDescription)\n", stderr)
             fputs("[SummaryEngine] raw (first 400 chars): \(response.prefix(400))\n", stderr)
             throw error
         }
+    }
+
+    /// Apply an append-only update batch to a summary. For each update:
+    ///   - if a section with the same title already exists, append its
+    ///     bullets (running the dedup pass to drop exact repeats);
+    ///   - otherwise insert as a new section at the end.
+    /// Cross-section dedup runs over the resulting summary too, so a small
+    /// model that mistakenly puts the same point under two headings only
+    /// shows it once.
+    static func applyUpdates(_ updates: [SummaryUpdate], to existing: CumulativeSummary) -> CumulativeSummary {
+        var sections = existing.sections
+        for update in updates {
+            let title = update.section.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, !update.bullets.isEmpty else { continue }
+            if let idx = sections.firstIndex(where: { $0.title == title }) {
+                sections[idx].bullets.append(contentsOf: update.bullets)
+            } else {
+                sections.append(.init(title: title, bullets: update.bullets))
+            }
+        }
+        // Apply the same dedup pass `parse` uses, so an LLM that re-mentions
+        // a bullet under a different section across turns doesn't pollute
+        // the summary.
+        let dtos = sections.map { JSONCoercer.SectionDTO(title: $0.title, bullets: $0.bullets) }
+        let cleaned = dedupedSections(dtos)
+        return CumulativeSummary(
+            sections: cleaned.map { .init(title: $0.title, bullets: $0.bullets) },
+            lastUpdated: .now
+        )
+    }
+
+    /// Parse a `{"updates":[{"section":..., "bullets":[...]}, ...]}` response
+    /// into `[SummaryUpdate]`. Tolerant of the same JSON quirks the section
+    /// parser handles (markdown fences, prose padding, `<think>` blocks).
+    static func parseUpdates(response: String) throws -> [SummaryUpdate] {
+        if response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw LLMParseError.emptyResponse
+        }
+        guard let jsonString = firstBalancedJSONValue(in: response) else {
+            throw LLMParseError.noJSONObject(rawSnippet: LLMParseError.snippet(of: response))
+        }
+        guard let root = try? JSONSerialization.jsonObject(
+            with: Data(jsonString.utf8),
+            options: [.fragmentsAllowed]
+        ) else {
+            throw LLMParseError.jsonDecodeFailed(
+                reason: "not valid JSON",
+                rawSnippet: LLMParseError.snippet(of: jsonString)
+            )
+        }
+        return JSONCoercer.coerceUpdates(root)
     }
 
     static func parse(response: String) throws -> CumulativeSummary {
@@ -349,6 +487,142 @@ public enum LLMParseError: LocalizedError, Equatable {
 }
 
 enum SummaryPrompt {
+    /// Prompt for the append-only `appendDelta` call. We only send section
+    /// TITLES (not bullets) so the prompt size stays roughly constant over
+    /// the lifetime of a long meeting. The LLM decides which existing
+    /// section a new point extends, or creates a new section, and emits
+    /// only the new bullets to add.
+    static func appendDelta(
+        existingSectionTitles: [String],
+        transcriptDelta: String,
+        language: String,
+        style: SummaryStyle = .builtin
+    ) -> [LLMMessage] {
+        let langHint = language == "auto" ? "the dominant language of the transcript" : language
+        let bulletLimit = style.maxBulletWords > 0 ? style.maxBulletWords : 14
+        let sectionCap = style.maxSections > 0
+            ? "\n- Do NOT exceed \(style.maxSections) total sections — when at the cap, extend an existing section instead of creating a new one."
+            : ""
+        let extra = style.extraSummaryInstructions.isEmpty
+            ? ""
+            : "\n\nAdditional user instructions:\n\(style.extraSummaryInstructions)"
+        let titlesBlock = existingSectionTitles.isEmpty
+            ? "(no sections yet — every update will create a new section.)"
+            : existingSectionTitles.map { "- \($0)" }.joined(separator: "\n")
+        let system = """
+        You are a meeting note-taker modelled on Notion AI Meeting Notes.
+        You receive the existing summary's section titles and a new
+        transcript fragment, and you emit ONLY the new bullets to add.
+        Output JSON only, no prose, no markdown fences.
+
+        REQUIRED top-level shape:
+        {"updates":[{"section":string,"bullets":[string]}]}
+
+        For each substantive new point in the transcript fragment:
+        - If it belongs to an existing section, set `section` to that
+          section's title VERBATIM (the matcher uses string equality).
+        - Otherwise set `section` to a NEW topic-specific title (≤20
+          chars / Japanese) and the bullets that should appear under it.
+        Multiple updates may share the same `section` — they'll be
+        appended in order.
+
+        Hard rules (CRITICAL):
+        - Do NOT restate, rephrase, or include any bullet that's already
+          summarized. You only see titles, not existing bullets, so be
+          conservative — only emit bullets when the transcript fragment
+          adds genuinely NEW information.
+        - Do NOT include content that should live in the Action Items /
+          Decisions / Open Questions / Suggested Topics panels (those are
+          extracted separately).
+        - Do NOT emit `updates` entries for filler / small talk / greetings.
+        - If the fragment has no substantive new content, return
+          {"updates":[]}.
+
+        Bullet quality (Notion-style granularity):
+        - Atomic: one fact / point per bullet.
+        - Specific & self-contained: meaningful even read in isolation.
+        - Substance over recap: capture the WHY / position / trade-off
+          rather than restating surface phrasing.
+        - Max \(bulletLimit) words per bullet.\(sectionCap)
+        - Transcript lines look like `[SpeakerLabel] ...`. When a specific
+          speaker's perspective is the substance of a bullet, prefix the
+          bullet with `[SpeakerLabel] ` so the reader can attribute it.
+
+        - Write in \(langHint).\(extra)
+        """
+        let user = """
+        ## Existing section titles (in order)
+        \(titlesBlock)
+
+        ## New transcript fragment
+        \(transcriptDelta)
+        """
+        return [
+            .init(role: .system, content: system),
+            .init(role: .user, content: user),
+        ]
+    }
+
+    /// Prompt for the full-pass `regenerate` call. Sends the entire
+    /// transcript and asks for a complete structured summary in one shot.
+    /// Used on Stop (for the saved final output) and by the user-initiated
+    /// re-summarize button.
+    static func fullPass(transcript: String, language: String, style: SummaryStyle = .builtin) -> [LLMMessage] {
+        let langHint = language == "auto" ? "the dominant language of the transcript" : language
+        let bulletLimit = style.maxBulletWords > 0 ? style.maxBulletWords : 14
+        let sectionCap = style.maxSections > 0
+            ? "\n- Use at most \(style.maxSections) sections total. Merge / reorganize if you exceed the cap."
+            : ""
+        let extra = style.extraSummaryInstructions.isEmpty
+            ? ""
+            : "\n\nAdditional user instructions:\n\(style.extraSummaryInstructions)"
+        let system = """
+        You are a meeting note-taker modelled on Notion AI Meeting Notes.
+        You are given the FULL transcript of a meeting that just ended.
+        Produce a polished structured summary. Output JSON only, no prose,
+        no markdown fences.
+
+        REQUIRED top-level shape:
+        {"sections":[{"title":string,"bullets":[string]}]}
+
+        Section structure (Notion-style):
+        - Organize bullets under topical sections reflecting what was
+          actually discussed (e.g. "プロジェクトX 進捗", "採用方針",
+          "技術選定の議論"). Avoid generic catch-alls like "その他" or
+          "全体" unless absolutely necessary.
+        - DO NOT create sections that duplicate the Action Items /
+          Decisions / Open Questions / Suggested Topics panels — those
+          live elsewhere. The summary is the DISCUSSION, not the
+          extracted to-dos.
+
+        Bullet quality (Notion-style granularity):
+        - Atomic: one fact / point per bullet.
+        - Specific & self-contained: meaningful even read in isolation.
+        - Substance over recap: capture the WHY / context / trade-offs.
+        - Skip small talk, greetings, and filler.
+        - Skip restating content that should live in Decisions / Actions
+          / Questions / Topics.
+
+        Style rules:
+        - Max \(bulletLimit) words per bullet.
+        - Order sections roughly in the order they appeared in the
+          discussion.\(sectionCap)
+        - Transcript lines look like `[SpeakerLabel] ...`. When a specific
+          speaker's perspective is the substance of a bullet, prefix the
+          bullet with `[SpeakerLabel] ` so the reader can attribute it.
+        - Even with a single section, wrap it: {"sections":[ {…} ]}.
+        - Write in \(langHint).\(extra)
+        """
+        let user = """
+        ## Full transcript
+        \(transcript)
+        """
+        return [
+            .init(role: .system, content: system),
+            .init(role: .user, content: user),
+        ]
+    }
+
     static func update(existing: CumulativeSummary, transcriptDelta: String, language: String, style: SummaryStyle = .builtin) -> [LLMMessage] {
         let existingJSON = (try? String(data: JSONEncoder().encode(existing), encoding: .utf8)) ?? "{}"
         let langHint = language == "auto" ? "the dominant language of the transcript" : language

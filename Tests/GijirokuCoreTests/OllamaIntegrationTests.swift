@@ -21,7 +21,7 @@ func ollamaSummaryRoundTripJapanese() async throws {
         .init(source: .system, text: "今日の議題は次のスプリントの計画です。", startTime: now, endTime: now.addingTimeInterval(3), isFinal: true),
         .init(source: .microphone, text: "新機能の優先順位を決めましょう。検索機能とエクスポート機能のどちらを先に作るか議論したい。", startTime: now.addingTimeInterval(3), endTime: now.addingTimeInterval(8), isFinal: true),
     ]
-    let summary = try await engine.ingest(newSegments: segments)
+    let summary = try await engine.regenerate(transcript: segments)
     #expect(!summary.sections.isEmpty, "Expected at least one summary section")
 }
 
