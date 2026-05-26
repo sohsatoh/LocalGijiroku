@@ -22,26 +22,36 @@ struct WaveformPanel: View {
     let system: WaveformChannelState
 
     var body: some View {
-        HStack(spacing: 12) {
-            channelRow(label: "🎙️", color: .blue, state: mic)
-            channelRow(label: "💻", color: .green, state: system)
+        HStack(spacing: 14) {
+            channelRow(symbol: "mic.fill", tint: .blue, state: mic)
+            channelRow(symbol: "speaker.wave.2.fill", tint: .green, state: system)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(NSColor.windowBackgroundColor).opacity(0.4),
+                    Color(NSColor.windowBackgroundColor).opacity(0.2),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
     }
 
-    private func channelRow(label: String, color: Color, state: WaveformChannelState) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .font(.system(size: 14))
-            WaveformCanvas(history: state.rmsHistory, color: color)
-                .frame(height: 28)
+    private func channelRow(symbol: String, tint: Color, state: WaveformChannelState) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+            WaveformCanvas(history: state.rmsHistory, tint: tint)
+                .frame(height: 32)
                 .frame(maxWidth: .infinity)
             Text(dbString(state.currentRMS))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .frame(width: 50, alignment: .trailing)
+                .frame(width: 54, alignment: .trailing)
         }
     }
 
@@ -54,27 +64,41 @@ struct WaveformPanel: View {
 
 private struct WaveformCanvas: View {
     let history: [Float]
-    let color: Color
+    let tint: Color
 
     var body: some View {
         Canvas { ctx, size in
             guard !history.isEmpty else { return }
             let barWidth = size.width / CGFloat(history.count)
             let mid = size.height / 2
+            // Gradient fill, brighter toward the trailing (most recent) edge.
+            let gradient = Gradient(colors: [tint.opacity(0.35), tint])
             for (i, level) in history.enumerated() {
                 let normalized = min(1.0, max(0.0, CGFloat(level) * 3.0))
-                let h = max(1.0, normalized * size.height)
+                let h = max(1.5, normalized * size.height)
                 let rect = CGRect(
                     x: CGFloat(i) * barWidth,
                     y: mid - h / 2,
-                    width: max(1.0, barWidth - 1),
+                    width: max(1.0, barWidth - 1.5),
                     height: h
                 )
-                let opacity = 0.35 + (CGFloat(i) / CGFloat(history.count)) * 0.65
-                ctx.fill(Path(rect), with: .color(color.opacity(opacity)))
+                let t = CGFloat(i) / CGFloat(max(history.count - 1, 1))
+                let alpha = 0.45 + t * 0.55
+                let color = gradient.stops.first!.color.opacity(alpha)
+                ctx.fill(
+                    Path(roundedRect: rect, cornerRadius: 1),
+                    with: .color(color.opacity(alpha))
+                )
             }
         }
-        .background(Color.black.opacity(0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }

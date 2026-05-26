@@ -4,6 +4,7 @@ import GijirokuCore
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var library: LibraryModel
+    @ObservedObject private var settings = SettingsModel.shared
 
     var body: some View {
         NavigationSplitView {
@@ -22,6 +23,12 @@ struct RootView: View {
             .frame(minWidth: 960)
         }
         .navigationSplitViewStyle(.balanced)
+        // Rebuild the entire window when the language override changes so
+        // every L10n.string read in this view tree re-resolves against the
+        // new `.lproj`. The environment locale piggybacks for SwiftUI's own
+        // number/date formatting.
+        .id(settings.appLanguage)
+        .environment(\.locale, L10n.locale())
     }
 
     @ViewBuilder
@@ -68,7 +75,10 @@ struct RecordingView: View {
             WaveformPanel(mic: model.micWaveform, system: model.systemWaveform)
             Divider()
             HSplitView {
-                TranscriptPane(segments: model.transcript)
+                TranscriptPane(
+                    segments: model.transcript,
+                    showDiarizationPlaceholder: model.diarizationEnabled
+                )
                     .frame(minWidth: 280, idealWidth: 360)
                 SummaryPane(summary: model.summary)
                     .frame(minWidth: 280, idealWidth: 360)
@@ -95,7 +105,13 @@ struct RecordingView: View {
 
             ProgressBadge(progress: model.summaryProgress)
 
+            if model.diarizationEnabled {
+                diarizationIndicator
+            }
+
             Spacer()
+
+            PaneViewModePicker()
 
             HStack(spacing: 6) {
                 Text(loc: "recording.save_destination")
@@ -121,121 +137,313 @@ struct RecordingView: View {
         }
         .padding(8)
     }
+
+    /// Pill showing diarization activity. While the speaker count is 0 we
+    /// label it "analyzing" so the user knows SpeakerKit is still loading or
+    /// hasn't seen enough audio yet — otherwise the absence of speaker
+    /// badges feels like silent failure.
+    private var diarizationIndicator: some View {
+        let count = model.distinctSpeakerCount
+        return HStack(spacing: 4) {
+            Image(systemName: "person.2.wave.2.fill")
+                .font(.caption)
+            Text(count == 0
+                 ? L10n.string("recording.diarization_analyzing")
+                 : L10n.format("recording.diarization_count_format", count))
+                .font(.caption)
+        }
+        .foregroundStyle(count == 0 ? Color.secondary : Color.accentColor)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill((count == 0 ? Color.secondary : Color.accentColor).opacity(0.12))
+        )
+        .help(L10n.string("recording.diarization_help"))
+    }
 }
+
+// MARK: - Panes
 
 struct TranscriptPane: View {
     let segments: [TranscriptSegment]
+    var showDiarizationPlaceholder: Bool = false
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    ForEach(segments) { seg in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text(icon(for: seg.source))
-                            if let speaker = seg.speaker {
-                                SpeakerBadge(label: speaker)
-                            }
-                            Text(seg.text)
-                                .textSelection(.enabled)
-                                .opacity(seg.isFinal ? 1.0 : 0.85)
-                            Spacer()
+        PaneContainer(
+            title: L10n.string("pane.transcript.title"),
+            systemImage: "text.bubble",
+            isEmpty: segments.isEmpty,
+            emptyMessage: L10n.string("pane.transcript.placeholder"),
+            emptySystemImage: "waveform.path"
+        ) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(segments) { seg in
+                            TranscriptRow(segment: seg, showDiarizationPlaceholder: showDiarizationPlaceholder)
+                                .id(seg.id)
                         }
-                        .id(seg.id)
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
-                .padding(8)
-            }
-            .onChange(of: segments.last?.id) { _, newValue in
-                guard let newValue else { return }
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(newValue, anchor: .bottom)
+                .onChange(of: segments.last?.id) { _, newValue in
+                    guard let newValue else { return }
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(newValue, anchor: .bottom)
+                    }
                 }
             }
         }
     }
+}
 
-    private func icon(for source: AudioSource) -> String {
-        source == .microphone ? "🎙️" : "💻"
+private struct TranscriptRow: View {
+    let segment: TranscriptSegment
+    let showDiarizationPlaceholder: Bool
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            // 4px speaker accent on the left edge — same hue as the badge,
+            // so a quick visual scan of the transcript shows who's talking
+            // without reading every label. Falls back to a neutral track
+            // when diarization is off or this segment is unlabeled.
+            Rectangle()
+                .fill(accentColor)
+                .frame(width: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 1.5, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if let speaker = segment.speaker {
+                        SpeakerBadge(label: speaker)
+                    } else if showDiarizationPlaceholder {
+                        SpeakerBadge(label: "nomatch")
+                    }
+                    Image(systemName: sourceSymbol)
+                        .font(.caption2)
+                        .foregroundStyle(sourceColor)
+                    Text(Self.timeFormatter.string(from: segment.startTime))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                Text(segment.text)
+                    .textSelection(.enabled)
+                    .opacity(segment.isFinal ? 1.0 : 0.7)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 4)
+            .padding(.vertical, 4)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(accentColor.opacity(0.05))
+        )
+    }
+
+    private var accentColor: Color {
+        if let speaker = segment.speaker {
+            return SpeakerPalette.color(for: speaker)
+        }
+        // No diarization label → use the source's color so the row still
+        // gets a left-edge accent that differentiates mic vs. system audio.
+        return sourceColor
+    }
+
+    private var sourceSymbol: String {
+        segment.source == .microphone ? "mic.fill" : "speaker.wave.2.fill"
+    }
+
+    private var sourceColor: Color {
+        segment.source == .microphone ? .blue : .green
     }
 }
 
 struct SummaryPane: View {
     let summary: CumulativeSummary
+    @ObservedObject private var settings = SettingsModel.shared
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                if summary.sections.isEmpty {
-                    Text("Summary will appear here as the meeting progresses.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
-                }
-                ForEach(summary.sections) { section in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(section.title)
-                            .font(.headline)
-                        ForEach(Array(section.bullets.enumerated()), id: \.offset) { _, bullet in
-                            HStack(alignment: .top, spacing: 6) {
-                                Text("•")
-                                Text(bullet)
-                                    .textSelection(.enabled)
-                                Spacer()
-                            }
+        PaneContainer(
+            title: L10n.string("pane.summary.title"),
+            systemImage: "doc.text",
+            isEmpty: summary.sections.isEmpty,
+            emptyMessage: L10n.string("pane.summary.placeholder"),
+            emptySystemImage: "doc.text.magnifyingglass"
+        ) {
+            if settings.paneMarkdownMode {
+                MarkdownPaneView(markdown: MarkdownExport.summary(summary))
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(summary.sections) { section in
+                            SummarySectionCard(section: section)
                         }
                     }
-                    Divider()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
             }
-            .padding(8)
         }
+    }
+}
+
+private struct SummarySectionCard: View {
+    let section: CumulativeSummary.Section
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(section.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            ForEach(Array(section.bullets.enumerated()), id: \.offset) { _, bullet in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 4))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 5)
+                    Text(bullet)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.06))
+        )
     }
 }
 
 struct EventPane: View {
     let events: [MeetingEvent]
+    @ObservedObject private var settings = SettingsModel.shared
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                if events.isEmpty {
-                    Text("Questions, decisions, and actions will appear here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
-                }
-                ForEach(events) { event in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text(icon(for: event.kind))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(event.text)
-                                .textSelection(.enabled)
-                            if let owner = event.owner {
-                                Text("owner / \(owner)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if let due = event.dueDate {
-                                Text("due / \(due)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+        PaneContainer(
+            title: L10n.string("pane.events.title"),
+            systemImage: "checklist",
+            isEmpty: events.isEmpty,
+            emptyMessage: L10n.string("pane.events.placeholder"),
+            emptySystemImage: "checkmark.circle"
+        ) {
+            if settings.paneMarkdownMode {
+                MarkdownPaneView(markdown: MarkdownExport.events(events))
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(EventKindStyle.displayOrder, id: \.self) { kind in
+                            let group = events.filter { $0.kind == kind }
+                            if !group.isEmpty {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    eventGroupHeader(kind: kind, count: group.count)
+                                    ForEach(group) { event in
+                                        EventCard(event: event)
+                                    }
+                                }
                             }
                         }
-                        Spacer()
                     }
-                    Divider()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
             }
-            .padding(8)
         }
     }
 
-    private func icon(for kind: MeetingEvent.Kind) -> String {
-        switch kind {
-        case .question: return "❓"
-        case .decision: return "✅"
-        case .action: return "⚡"
+    private func eventGroupHeader(kind: MeetingEvent.Kind, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: EventKindStyle.symbol(kind))
+                .font(.caption)
+                .foregroundStyle(EventKindStyle.tint(kind))
+            Text(EventKindStyle.label(kind))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text(verbatim: "(\(count))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Spacer()
         }
+    }
+}
+
+// MARK: - Shared pane container
+
+/// Standard chrome around each detail pane: a slim heading bar with an icon
+/// and title, a divider, and either the content or a centered empty state.
+/// Centralised so the three panes look like a cohesive set instead of three
+/// independently-styled scroll views.
+private struct PaneContainer<Content: View>: View {
+    let title: String
+    let systemImage: String
+    let isEmpty: Bool
+    let emptyMessage: String
+    let emptySystemImage: String
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.05))
+            Divider()
+            if isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: emptySystemImage)
+                        .font(.system(size: 28))
+                        .foregroundStyle(.tertiary)
+                    Text(emptyMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                content()
+            }
+        }
+    }
+}
+
+/// Segmented switch toggling Summary/Events panes between structured list view
+/// and Markdown rendering. Bound directly to `SettingsModel.shared`, so the
+/// preference persists and applies to both live recording and saved sessions.
+struct PaneViewModePicker: View {
+    @ObservedObject private var settings = SettingsModel.shared
+
+    var body: some View {
+        Picker("", selection: $settings.paneMarkdownMode) {
+            Text(loc: "pane.view_mode.list").tag(false)
+            Text(loc: "pane.view_mode.markdown").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .help(L10n.string("pane.view_mode.help"))
     }
 }

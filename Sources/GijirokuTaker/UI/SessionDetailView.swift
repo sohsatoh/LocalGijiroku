@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import GijirokuCore
 
 /// Read-only view for a previously-saved session, mirroring the layout of the
@@ -26,7 +28,13 @@ struct SessionDetailView: View {
             Divider()
             if let session = loadedSession {
                 HSplitView {
-                    TranscriptPane(segments: session.transcript)
+                    TranscriptPane(
+                        segments: session.transcript,
+                        // For saved sessions, "diarization enabled" can be
+                        // inferred from the data itself: if any segment has a
+                        // speaker label, the session was diarized.
+                        showDiarizationPlaceholder: session.transcript.contains { $0.speaker != nil }
+                    )
                         .frame(minWidth: 280, idealWidth: 360)
                     SummaryPane(summary: session.summary)
                         .frame(minWidth: 280, idealWidth: 360)
@@ -83,12 +91,20 @@ struct SessionDetailView: View {
             Text(L10n.format("session.stats_format", session?.transcript.count ?? 0, session?.events.count ?? 0))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            PaneViewModePicker()
             Button {
                 if let session { editingStyle = session }
             } label: {
                 Label(loc: "recording.template", systemImage: "doc.text")
             }
             .disabled(session == nil)
+            Button {
+                if let session { exportMarkdown(session: session) }
+            } label: {
+                Label(loc: "session.export", systemImage: "square.and.arrow.up")
+            }
+            .disabled(session == nil)
+            .help(L10n.string("session.export.help"))
             Button {
                 Task { await library.regenerateSummary(for: sessionID) }
             } label: {
@@ -99,6 +115,38 @@ struct SessionDetailView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// Resolves the template hierarchy (user → project → session) and renders
+    /// the Markdown, then presents NSSavePanel. Side effect only — no return.
+    private func exportMarkdown(session: Session) {
+        let project = session.projectId.flatMap { id in
+            library.projects.first(where: { $0.id == id })
+        }
+        let resolved = SummaryStyle.resolved(
+            user: SettingsModel.shared.userSummaryStyle,
+            project: project?.summaryStyle,
+            session: session.summaryStyle
+        )
+        let markdown = MarkdownExporter.render(session, style: resolved)
+        let panel = NSSavePanel()
+        if let mdType = UTType(filenameExtension: "md") {
+            panel.allowedContentTypes = [mdType]
+        }
+        panel.nameFieldStringValue = "\(safeFilename(session.title)).md"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// Strips path separators and other characters that NSSavePanel will
+    /// refuse so the suggested filename actually populates the field.
+    private func safeFilename(_ title: String) -> String {
+        let bad = CharacterSet(charactersIn: "/:\\?*<>|\"")
+        let cleaned: [Character] = title.unicodeScalars.map { scalar in
+            bad.contains(scalar) ? Character(" ") : Character(scalar)
+        }
+        return String(cleaned).trimmingCharacters(in: .whitespaces)
     }
 
     private var isRegeneratingMe: Bool {
