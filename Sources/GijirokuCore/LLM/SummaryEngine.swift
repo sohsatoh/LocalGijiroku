@@ -166,6 +166,67 @@ public actor SummaryEngine {
         }
     }
 
+    /// Re-summarize the CURRENT in-memory summary so semantic duplicates get
+    /// merged and over-dense sections get condensed. Transcript is not
+    /// involved — the LLM only sees the structured summary and emits a
+    /// tightened version of the same shape.
+    ///
+    /// Trade-off: appendDelta only sees one window at a time and relies on
+    /// string-based dedup, which catches exact restatements but not
+    /// semantic ones like "リリースは Q3" vs "Q3 にリリース予定". After
+    /// many turns the result is a long, repetitive list. Running this pass
+    /// after each appendDelta keeps the live UI readable without paying
+    /// the full transcript re-summarize cost every turn.
+    ///
+    /// Cheap-skip when the summary has too little content to benefit from
+    /// the round trip — early-meeting turns don't need consolidation.
+    /// Guard against drastic shrink so a small model that hallucinates a
+    /// "tldr" instead of consolidating doesn't silently delete facts.
+    public func consolidate() async throws -> CumulativeSummary {
+        let totalBullets = current.sections.reduce(0) { $0 + $1.bullets.count }
+        guard totalBullets >= 4 else { return current }
+        fputs("[SummaryEngine] consolidate sections=\(current.sections.count) bullets=\(totalBullets)\n", stderr)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let summaryJSON = (try? String(data: encoder.encode(current), encoding: .utf8)) ?? "{}"
+        let messages = SummaryPrompt.consolidate(
+            summaryJSON: summaryJSON,
+            language: config.language,
+            style: config.style
+        )
+        // 1500 tokens is enough to fit the consolidated rewrite of any
+        // summary the appendDelta path can plausibly accumulate (we cap
+        // density via the bullet-limit instructions in the prompt).
+        let response = try await client.chat(
+            model: config.model,
+            messages: messages,
+            format: Self.responseFormat,
+            maxTokens: 1500
+        )
+        do {
+            let consolidated = try Self.parse(response: response)
+            let afterBullets = consolidated.sections.reduce(0) { $0 + $1.bullets.count }
+            // Drastic-shrink guard: if the LLM "consolidated" by deleting
+            // more than half the bullets, treat it as info loss rather
+            // than condensation and keep the original. The threshold is
+            // intentionally lenient — real consolidation often does drop
+            // 20–30 %, but losing 50 %+ in one pass is suspicious.
+            if afterBullets * 2 < totalBullets {
+                fputs("[SummaryEngine] consolidate shrank too much (\(totalBullets) → \(afterBullets)); keeping pre-consolidate summary\n", stderr)
+                return current
+            }
+            current = consolidated
+            return consolidated
+        } catch {
+            // Same fallback shape as appendDelta: parse failure surfaces
+            // up, but `current` was already updated by the caller's
+            // appendDelta, so the recording loop keeps moving.
+            fputs("[SummaryEngine] consolidate parse FAILED: \(error.localizedDescription)\n", stderr)
+            fputs("[SummaryEngine] raw (first 400 chars): \(response.prefix(400))\n", stderr)
+            throw error
+        }
+    }
+
     /// Fresh full-pass summary over the entire transcript. Resets internal
     /// state, then asks the LLM for a complete structured summary in one
     /// shot. Used:
@@ -556,6 +617,67 @@ enum SummaryPrompt {
 
         ## New transcript fragment
         \(transcriptDelta)
+        """
+        return [
+            .init(role: .system, content: system),
+            .init(role: .user, content: user),
+        ]
+    }
+
+    /// Prompt for the `consolidate` call. The LLM sees ONLY the current
+    /// summary (not the transcript) and produces a tighter version of the
+    /// same shape — semantic duplicates merged, closely related bullets
+    /// combined, redundancy across sections dropped. Keeps the live UI
+    /// readable as appendDelta accumulates over a long meeting.
+    static func consolidate(
+        summaryJSON: String,
+        language: String,
+        style: SummaryStyle = .builtin
+    ) -> [LLMMessage] {
+        let langHint = language == "auto" ? "the dominant language of the summary" : language
+        let bulletLimit = style.maxBulletWords > 0 ? style.maxBulletWords : 14
+        let sectionCap = style.maxSections > 0
+            ? "\n- Use at most \(style.maxSections) sections total. Merge if necessary."
+            : ""
+        let extra = style.extraSummaryInstructions.isEmpty
+            ? ""
+            : "\n\nAdditional user instructions:\n\(style.extraSummaryInstructions)"
+        let system = """
+        You are tightening an in-progress meeting summary. The input is
+        the structured summary so far (no transcript). Output JSON only,
+        no prose, no markdown fences.
+
+        REQUIRED top-level shape:
+        {"sections":[{"title":string,"bullets":[string]}]}
+
+        Your job is consolidation, NOT re-extraction:
+        - Merge bullets that say the same thing in different words into
+          ONE concise bullet (e.g. "リリースは Q3" + "Q3 にリリース予定"
+          → "リリースは Q3").
+        - Combine closely related bullets within the same section into a
+          single more concise bullet when it reads more clearly.
+        - Drop redundancy ACROSS sections too — a point should appear in
+          exactly one place.
+        - Empty sections get dropped.
+
+        HARD constraints:
+        - PRESERVE ALL distinct factual information. When in doubt, leave
+          two bullets separate. Losing facts is worse than redundancy.
+        - DO NOT invent new content. You only see the summary, not the
+          transcript — any new bullet you produce must be derivable from
+          the bullets you were given.
+        - Preserve section order from the input. Don't reshuffle unless
+          you're merging two sections together.
+        - Preserve `[SpeakerLabel] ` prefixes on bullets where present.
+
+        Style rules:
+        - Max \(bulletLimit) words per bullet.\(sectionCap)
+        - Even with a single section, wrap it: {"sections":[ {…} ]}.
+        - Write in \(langHint).\(extra)
+        """
+        let user = """
+        ## Current summary
+        \(summaryJSON)
         """
         return [
             .init(role: .system, content: system),

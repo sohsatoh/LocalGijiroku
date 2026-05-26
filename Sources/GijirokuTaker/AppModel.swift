@@ -399,7 +399,17 @@ final class AppModel: ObservableObject {
             // bullets to add. Keeps per-turn cost roughly constant — Stop
             // runs a full-pass regenerate that polishes the final saved
             // summary.
-            let updatedSummary = try await summaryEngine.appendDelta(newSegments: segments)
+            var updatedSummary = try await summaryEngine.appendDelta(newSegments: segments)
+            // Consolidate the resulting summary so semantic duplicates
+            // and redundant bullets don't pile up across turns. Cheap
+            // (no transcript involved); the engine skips early when the
+            // summary is small enough that consolidation has nothing to
+            // do. Falls back to the delta-only summary on parse failure.
+            do {
+                updatedSummary = try await summaryEngine.consolidate()
+            } catch {
+                logger.error("consolidate failed (keeping delta summary): \(error.localizedDescription, privacy: .public)")
+            }
             summaryProgress = .extractingEvents(segmentCount: segments.count)
             // Pass the current still-open events so the LLM can mark them
             // resolved when the new fragment contains an answer / outcome.

@@ -146,3 +146,101 @@ import Foundation
     #expect(messages[1].content.contains("[A] hello world"))
     #expect(messages[0].content.contains("Japanese"))
 }
+
+@Test func consolidatePromptIncludesSummaryJSON() {
+    let messages = SummaryPrompt.consolidate(
+        summaryJSON: #"{"sections":[{"title":"X","bullets":["a","b"]}]}"#,
+        language: "Japanese"
+    )
+    #expect(messages.count == 2)
+    #expect(messages[0].role == .system)
+    #expect(messages[1].content.contains(#"{"sections":[{"title":"X","bullets":["a","b"]}]}"#))
+    #expect(messages[0].content.contains("Japanese"))
+}
+
+// MARK: - consolidate() runtime behaviour
+
+/// Test double for `LLMClient`. Records the last request and returns a
+/// canned response (or throws). Sendable via @unchecked because tests are
+/// single-threaded — the actual atomicity guarantee comes from running
+/// each test in isolation.
+private final class CannedLLMClient: LLMClient, @unchecked Sendable {
+    private(set) var requests: [[LLMMessage]] = []
+    var response: String = "{}"
+    var error: Error?
+
+    func chat(model: String, messages: [LLMMessage], format: LLMResponseFormat, maxTokens: Int) async throws -> String {
+        requests.append(messages)
+        if let error { throw error }
+        return response
+    }
+}
+
+@Test func consolidateSkipsWhenSummaryHasFewerThanFourBullets() async throws {
+    let client = CannedLLMClient()
+    let engine = SummaryEngine(client: client, config: .init(model: "test"))
+    // Seed via appendDelta — but rig the client to return a tiny summary.
+    client.response = #"{"updates":[{"section":"A","bullets":["x","y","z"]}]}"#
+    let now = Date()
+    let segments = [TranscriptSegment(source: .microphone, text: "hi", startTime: now, endTime: now, isFinal: true)]
+    _ = try await engine.appendDelta(newSegments: segments)
+    // 3 bullets — below the threshold of 4. consolidate should be a no-op
+    // (no extra LLM request beyond the appendDelta one).
+    let beforeRequests = client.requests.count
+    _ = try await engine.consolidate()
+    #expect(client.requests.count == beforeRequests)
+}
+
+@Test func consolidateRunsAndAcceptsResultWhenAboveThreshold() async throws {
+    let client = CannedLLMClient()
+    let engine = SummaryEngine(client: client, config: .init(model: "test"))
+    // Seed with 5 bullets so consolidate runs.
+    client.response = #"{"updates":[{"section":"A","bullets":["a1","a2","a3","a4","a5"]}]}"#
+    let now = Date()
+    _ = try await engine.appendDelta(newSegments: [
+        TranscriptSegment(source: .microphone, text: "seed", startTime: now, endTime: now, isFinal: true),
+    ])
+    // Now flip the canned response to the "consolidated" shape.
+    client.response = #"{"sections":[{"title":"A","bullets":["a1","a2-a3 merged","a4","a5"]}]}"#
+    let result = try await engine.consolidate()
+    #expect(result.sections.count == 1)
+    #expect(result.sections[0].bullets == ["a1", "a2-a3 merged", "a4", "a5"])
+}
+
+@Test func consolidateDiscardsResultWhenLLMShrinksTooMuch() async throws {
+    let client = CannedLLMClient()
+    let engine = SummaryEngine(client: client, config: .init(model: "test"))
+    // Seed with 6 bullets.
+    client.response = #"{"updates":[{"section":"X","bullets":["b1","b2","b3","b4","b5","b6"]}]}"#
+    let now = Date()
+    _ = try await engine.appendDelta(newSegments: [
+        TranscriptSegment(source: .microphone, text: "seed", startTime: now, endTime: now, isFinal: true),
+    ])
+    let beforeBullets = await engine.currentSummary().sections.reduce(0) { $0 + $1.bullets.count }
+    #expect(beforeBullets == 6)
+    // Rig the consolidate response to drop too many bullets — 6 → 2 is
+    // less than half retained, which trips the safety guard.
+    client.response = #"{"sections":[{"title":"X","bullets":["super short tldr","another"]}]}"#
+    let result = try await engine.consolidate()
+    // Pre-consolidate state preserved.
+    let afterBullets = result.sections.reduce(0) { $0 + $1.bullets.count }
+    #expect(afterBullets == 6)
+}
+
+@Test func consolidatePromptCarriesCurrentSummaryToLLM() async throws {
+    let client = CannedLLMClient()
+    let engine = SummaryEngine(client: client, config: .init(model: "test", language: "Japanese"))
+    client.response = #"{"updates":[{"section":"プロジェクトX","bullets":["bullet1","bullet2","bullet3","bullet4"]}]}"#
+    let now = Date()
+    _ = try await engine.appendDelta(newSegments: [
+        TranscriptSegment(source: .microphone, text: "seed", startTime: now, endTime: now, isFinal: true),
+    ])
+    // Return same shape so the guard doesn't trip.
+    client.response = #"{"sections":[{"title":"プロジェクトX","bullets":["bullet1","bullet2","bullet3","bullet4"]}]}"#
+    _ = try await engine.consolidate()
+    // The last LLM request should be the consolidate one — user message
+    // carries the existing summary as JSON.
+    let userPrompt = client.requests.last?.last?.content ?? ""
+    #expect(userPrompt.contains("プロジェクトX"))
+    #expect(userPrompt.contains("bullet1"))
+}
