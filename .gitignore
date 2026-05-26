@@ -22,3 +22,6 @@ Models/
 .env
 .env.local
 default.profraw
+
+# Claude Code worktrees and per-project state
+.claude/
