@@ -111,9 +111,27 @@ public actor WhisperTranscription: TranscriptionEngine {
     /// Cross-window stable label assigner. Resets per session inside
     /// `transcribe(_:)`.
     private let speakerTracker = SpeakerTracker()
+    /// Rolling per-source audio buffers. Lifted out of `run()` so external
+    /// callers (AppModel) can clear them via `clearSource(_:)` when the
+    /// user toggles a source off mid-recording — otherwise the buffer
+    /// still holds the last ~25 s of audio and every 5-s inference cycle
+    /// keeps transcribing it.
+    private var buffers: [AudioSource: SourceBuffer] = [
+        .microphone: SourceBuffer(source: .microphone),
+        .system: SourceBuffer(source: .system),
+    ]
 
     public init(config: Config = .init()) {
         self.config = config
+    }
+
+    /// Drop accumulated audio for the given source. Called by AppModel
+    /// immediately after the AudioCaptureEngine has been told to stop a
+    /// source, so the inference loop doesn't keep re-transcribing the
+    /// last 25 s of audio that's still sitting in the buffer.
+    public func clearSource(_ source: AudioSource) {
+        buffers[source] = SourceBuffer(source: source)
+        fputs("[WhisperTranscription] cleared \(source.rawValue) buffer\n", stderr)
     }
 
     private func ensureLoaded() async throws -> WhisperKit {
@@ -180,7 +198,10 @@ public actor WhisperTranscription: TranscriptionEngine {
             return
         }
 
-        var buffers: [AudioSource: SourceBuffer] = [
+        // Reset the actor-owned buffers for this transcription session
+        // (resume after pause / new recording start). lastInferenceAt is
+        // a local because nothing outside the loop needs it.
+        buffers = [
             .microphone: SourceBuffer(source: .microphone),
             .system: SourceBuffer(source: .system),
         ]
@@ -188,7 +209,13 @@ public actor WhisperTranscription: TranscriptionEngine {
 
         var chunkCount = 0
         for await chunk in chunks {
-            buffers[chunk.source]?.append(chunk)
+            // Subscript-and-mutate the actor's dictionary in place. Without
+            // pulling the buffer into a local var we'd be mutating a copy
+            // and discarding it (Swift Dictionary value-type semantics).
+            if var buffer = buffers[chunk.source] {
+                buffer.append(chunk)
+                buffers[chunk.source] = buffer
+            }
             chunkCount += 1
             if chunkCount.isMultiple(of: 10) {
                 let mic = buffers[.microphone]?.totalSamples ?? 0

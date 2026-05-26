@@ -230,13 +230,34 @@ final class AppModel: ObservableObject {
     func setSystemCaptureEnabled(_ enabled: Bool) {
         settings.captureSystemAudio = enabled
         guard isRecording, !isPaused, let captureEngine else { return }
-        Task { await captureEngine.setSystemEnabled(enabled) }
+        Task {
+            await captureEngine.setSystemEnabled(enabled)
+            // Drop the source's rolling audio buffer so the inference loop
+            // doesn't keep transcribing the last 25 s of stale audio.
+            // Symmetric for both directions: on-toggle starts a fresh
+            // buffer, off-toggle clears one that would otherwise persist.
+            if let transcription = self.transcriptionEngine {
+                await transcription.clearSource(.system)
+            }
+        }
+        if !enabled {
+            // Reset the waveform meter so the muted source visibly quiets.
+            systemWaveform = WaveformChannelState()
+        }
     }
 
     func setMicCaptureEnabled(_ enabled: Bool) {
         settings.captureMicrophone = enabled
         guard isRecording, !isPaused, let captureEngine else { return }
-        Task { await captureEngine.setMicEnabled(enabled) }
+        Task {
+            await captureEngine.setMicEnabled(enabled)
+            if let transcription = self.transcriptionEngine {
+                await transcription.clearSource(.microphone)
+            }
+        }
+        if !enabled {
+            micWaveform = WaveformChannelState()
+        }
     }
 
     func append(segment: TranscriptSegment) {
