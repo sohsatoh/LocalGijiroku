@@ -13,7 +13,18 @@ final class AppModel: ObservableObject {
     /// state — transcript, summary, events, sessionId — is preserved).
     /// `isRecording` stays true in this state; only `isPaused` differentiates.
     @Published var isPaused: Bool = false
+    /// Confirmed transcript only. The rolling unconfirmed tail lives in
+    /// `liveTail` and is never appended here — that prevented stale
+    /// orphan rows when WhisperKit re-segmented between cycles. Everything
+    /// that persists (drafts / final session) or feeds the LLM operates
+    /// on `transcript` directly because the unconfirmed tail is the
+    /// volatile part Whisper is still actively rewriting.
     @Published var transcript: [TranscriptSegment] = []
+    /// Per-source live tail. Replaced wholesale on each unconfirmed
+    /// emission from WhisperTranscription — there is at most ONE tail
+    /// segment per source at any time. The UI shows it dimmed at the
+    /// end of the corresponding speaker's last block (Notion-style flow).
+    @Published var liveTail: [AudioSource: TranscriptSegment] = [:]
     @Published var summary: CumulativeSummary = CumulativeSummary()
     @Published var events: [MeetingEvent] = []
     @Published var statusMessage: String = L10n.string("status.idle")
@@ -81,14 +92,11 @@ final class AppModel: ObservableObject {
         return seen.count
     }
 
-    /// The confirmed-only view of the live transcript. Everything that goes
-    /// to disk (drafts, final session) or the LLM pipeline (summary,
-    /// regenerate, title) must use this — unconfirmed segments are the
-    /// rolling Whisper tail that may be rewritten on the next inference
-    /// cycle, so persisting or summarizing them produces unstable output.
-    private var confirmedTranscript: [TranscriptSegment] {
-        transcript.filter(\.isConfirmed)
-    }
+    /// Historical alias — `transcript` is now confirmed-only by
+    /// construction (unconfirmed segments live in `liveTail`). Keeping the
+    /// name so the downstream pipeline call sites read clearly about why
+    /// they're getting the "stable" view.
+    private var confirmedTranscript: [TranscriptSegment] { transcript }
 
     init() {
         let appSupport = FileManager.default
@@ -252,6 +260,7 @@ final class AppModel: ObservableObject {
         self.transcriptionEngine = transcription
 
         transcript.removeAll()
+        liveTail.removeAll()
         summary = CumulativeSummary()
         events.removeAll()
         pendingForSummary.removeAll()
@@ -363,31 +372,31 @@ final class AppModel: ObservableObject {
     }
 
     func append(segment: TranscriptSegment) {
+        // Unconfirmed segments go to `liveTail` only — one slot per source,
+        // replaced wholesale on every emission. Never enters `transcript`,
+        // `pendingForSummary`, or any persistence path. This is what kills
+        // the "stale unconfirmed orphan" rows the rolling-window deduper
+        // used to leave behind when WhisperKit re-segmented between cycles.
+        guard segment.isConfirmed else {
+            liveTail[segment.source] = segment
+            return
+        }
+        // A new confirmed segment is arriving — the current tail for this
+        // source has now been (at least partially) finalized into stable
+        // text. Drop it so the UI doesn't show duplicate "live" content
+        // alongside the just-confirmed row. The next inference cycle will
+        // produce a new tail covering the truly-volatile region.
+        liveTail[segment.source] = nil
+
         let outcome = transcriptDeduper.merge(segment, into: &transcript)
         switch outcome {
         case .appended:
-            // 確定済みのみサマリ用 buffer に積む。未確定セグメントは次のサイクルで
-            // 書き換えられる可能性があるので LLM パイプラインに渡さない。
-            // 後で `.replaced` で confirmed=true へ昇格した瞬間にここに入る。
-            if segment.isConfirmed {
-                pendingForSummary.append(segment)
-            }
+            pendingForSummary.append(segment)
         case .replaced(let previousID):
-            // 既存セグメントが上書きされた → サマリ用 buffer の同じ id を最新版に置換。
-            // 未確定 → 確定への昇格でも同じ枝に入るので、初めて pendingForSummary に
-            // 追加されるのはこの瞬間。append しているわけではないので findIndex で
-            // 既存があれば更新、無ければ新規追加。
             guard let merged = transcript.first(where: { $0.id == previousID }) else { break }
             if let pIdx = pendingForSummary.firstIndex(where: { $0.id == previousID }) {
-                if merged.isConfirmed {
-                    pendingForSummary[pIdx] = merged
-                } else {
-                    // Downgrade is impossible (deduper's confirmation is sticky)
-                    // so this branch only fires when the existing entry was
-                    // already confirmed — keep it.
-                    pendingForSummary[pIdx] = merged
-                }
-            } else if merged.isConfirmed {
+                pendingForSummary[pIdx] = merged
+            } else {
                 pendingForSummary.append(merged)
             }
         case .ignored:
@@ -626,6 +635,7 @@ final class AppModel: ObservableObject {
     /// previous meeting's transcript / summary / events.
     private func resetLiveWorkspace() {
         transcript.removeAll()
+        liveTail.removeAll()
         summary = CumulativeSummary()
         events.removeAll()
         pendingForSummary.removeAll()

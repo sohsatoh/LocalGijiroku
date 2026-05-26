@@ -29,7 +29,7 @@ struct SessionDetailView: View {
             if let session = loadedSession {
                 HSplitView {
                     TranscriptPane(
-                        segments: session.transcript,
+                        turns: TranscriptTurnGrouping.turns(from: session.transcript),
                         // For saved sessions, "diarization enabled" can be
                         // inferred from the data itself: if any segment has a
                         // speaker label, the session was diarized.

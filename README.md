@@ -9,7 +9,7 @@ A local-first meeting recorder for macOS. Records your audio, transcribes it wit
 ## What it does
 
 - Captures **microphone audio** and **system audio** simultaneously (so the other side of Zoom / Meet calls is included).
-- Streams audio through **WhisperKit** for real-time, multilingual transcription (Japanese and English tuned). The live transcript shows confirmed text alongside an italicized, dimmed "unconfirmed tail" so you can see the rolling Whisper output the moment it lands; confirmed segments are what get saved and shown to the LLM.
+- Streams audio through **WhisperKit** for real-time, multilingual transcription (Japanese and English tuned). The live transcript renders Notion-style: one block per speaker turn, with confirmed prose flowing inline and the rolling Whisper tail appearing as italicized secondary text at the end of the current block. Confirmed segments are what get saved and shown to the LLM.
 - Every 30 seconds, hands new confirmed transcript to a **local LLM** (MLX or Ollama) for:
   - an append-only **summary** update (LLM only sees existing section titles + new transcript and emits just the new bullets), followed by a consolidation pass that folds semantic duplicates — keeps per-turn cost roughly constant for hour-long meetings.
   - extraction of structured **events** (topics / questions / decisions / action items, with owner + due date when stated), including resolution detection against open items.
@@ -66,7 +66,7 @@ The first time you select an MLX model, ~2–5 GB will download from HuggingFace
 ## Tests
 
 ```bash
-swift test                                       # ~105 hermetic unit tests
+swift test                                       # ~134 hermetic unit tests
 RUN_OLLAMA_TESTS=1 swift test --filter ollama    # live Ollama integration
 .build/debug/GijirokuCLI /path/to/audio.wav      # headless E2E from a WAV
 ```

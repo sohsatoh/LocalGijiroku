@@ -84,7 +84,10 @@ struct RecordingView: View {
             Divider()
             HSplitView {
                 TranscriptPane(
-                    segments: model.transcript,
+                    turns: TranscriptTurnGrouping.turns(
+                        from: model.transcript,
+                        liveTail: model.liveTail
+                    ),
                     showDiarizationPlaceholder: model.diarizationEnabled
                 )
                     .frame(minWidth: 280, idealWidth: 360)
@@ -174,32 +177,44 @@ struct RecordingView: View {
 // MARK: - Panes
 
 struct TranscriptPane: View {
-    let segments: [TranscriptSegment]
+    let turns: [TranscriptTurn]
     var showDiarizationPlaceholder: Bool = false
 
     var body: some View {
         PaneContainer(
             title: L10n.string("pane.transcript.title"),
             systemImage: "text.bubble",
-            isEmpty: segments.isEmpty,
+            isEmpty: turns.isEmpty,
             emptyMessage: L10n.string("pane.transcript.placeholder"),
             emptySystemImage: "waveform.path"
         ) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(segments) { seg in
-                            TranscriptRow(segment: seg, showDiarizationPlaceholder: showDiarizationPlaceholder)
-                                .id(seg.id)
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(turns) { turn in
+                            TranscriptTurnBlock(
+                                turn: turn,
+                                showDiarizationPlaceholder: showDiarizationPlaceholder
+                            )
+                            .id(turn.id)
                         }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                 }
-                .onChange(of: segments.last?.id) { _, newValue in
+                .onChange(of: turns.last?.id) { _, newValue in
                     guard let newValue else { return }
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(newValue, anchor: .bottom)
+                    }
+                }
+                // Also nudge the scroll when the most recent turn just
+                // gained tail text — otherwise long-running live tails
+                // sit below the fold while the user can't see them grow.
+                .onChange(of: turns.last?.liveTail?.text) { _, _ in
+                    guard let id = turns.last?.id else { return }
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
             }
@@ -207,8 +222,13 @@ struct TranscriptPane: View {
     }
 }
 
-private struct TranscriptRow: View {
-    let segment: TranscriptSegment
+/// One Notion-style speaker turn: a single block per speaker run, the
+/// confirmed text flows in as Whisper finalizes it, and a dimmed
+/// "in-progress" tail appears inline at the end while the rolling decoder
+/// is still rewriting it. No per-segment row borders — visually the
+/// transcript reads like prose, not a debug log of decoder boundaries.
+private struct TranscriptTurnBlock: View {
+    let turn: TranscriptTurn
     let showDiarizationPlaceholder: Bool
 
     private static let timeFormatter: DateFormatter = {
@@ -219,17 +239,13 @@ private struct TranscriptRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // 4px speaker accent on the left edge — same hue as the badge,
-            // so a quick visual scan of the transcript shows who's talking
-            // without reading every label. Falls back to a neutral track
-            // when diarization is off or this segment is unlabeled.
             Rectangle()
                 .fill(accentColor)
                 .frame(width: 3)
                 .clipShape(RoundedRectangle(cornerRadius: 1.5, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if let speaker = segment.speaker {
+                    if let speaker = turn.speaker {
                         SpeakerBadge(label: speaker)
                     } else if showDiarizationPlaceholder {
                         SpeakerBadge(label: "nomatch")
@@ -237,19 +253,16 @@ private struct TranscriptRow: View {
                     Image(systemName: sourceSymbol)
                         .font(.caption2)
                         .foregroundStyle(sourceColor)
-                    Text(Self.timeFormatter.string(from: segment.startTime))
+                    Text(Self.timeFormatter.string(from: turn.startTime))
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
-                Text(segment.text)
+                // Concatenate confirmed text + dimmed live tail in a single
+                // Text composition so the tail "flows" inline with the
+                // confirmed prose instead of appearing as a separate row.
+                composedText
                     .textSelection(.enabled)
-                    // Unconfirmed (still in Whisper's rolling tail) — render
-                    // dimmed and italic so the user sees the live stream
-                    // but isn't surprised when the wording gets rewritten
-                    // by the next inference pass.
-                    .italic(!segment.isConfirmed)
-                    .opacity(segment.isConfirmed ? 1.0 : 0.55)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -263,21 +276,33 @@ private struct TranscriptRow: View {
         )
     }
 
+    private var composedText: Text {
+        var combined = Text(turn.text)
+        if let tail = turn.liveTail {
+            // Separator + dim/italic tail. We can't use opacity on a Text
+            // run directly, so foregroundStyle(.secondary) plus italic()
+            // approximates "this is still being decoded".
+            let separator = turn.segments.isEmpty ? "" : " "
+            combined = combined + Text(separator + tail.text)
+                .italic()
+                .foregroundStyle(.secondary)
+        }
+        return combined
+    }
+
     private var accentColor: Color {
-        if let speaker = segment.speaker {
+        if let speaker = turn.speaker {
             return SpeakerPalette.color(for: speaker)
         }
-        // No diarization label → use the source's color so the row still
-        // gets a left-edge accent that differentiates mic vs. system audio.
         return sourceColor
     }
 
     private var sourceSymbol: String {
-        segment.source == .microphone ? "mic.fill" : "speaker.wave.2.fill"
+        turn.source == .microphone ? "mic.fill" : "speaker.wave.2.fill"
     }
 
     private var sourceColor: Color {
-        segment.source == .microphone ? .blue : .green
+        turn.source == .microphone ? .blue : .green
     }
 }
 

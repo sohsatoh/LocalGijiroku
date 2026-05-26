@@ -426,20 +426,59 @@ public actor WhisperTranscription: TranscriptionEngine {
             // `isConfirmed` to keep unstable text out of saved state.
             let unconfirmedTail = config.requiredSegmentsForConfirmation
             let cutoffIndex = max(0, flatSegments.count - unconfirmedTail)
-            for (i, item) in flatSegments.enumerated() {
-                let confirmed = i < cutoffIndex
+
+            // Confirmed segments stream out individually so the deduper can
+            // merge each one with its earlier-cycle predecessor by time +
+            // similarity. Each gets its own row in the UI, which is what we
+            // want for stable text.
+            for (i, item) in flatSegments.enumerated() where i < cutoffIndex {
                 let transcript = TranscriptSegment(
                     source: source,
                     speaker: item.3,
                     text: item.0.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
                     startTime: item.1,
                     endTime: item.2,
-                    isFinal: confirmed,
-                    isConfirmed: confirmed
+                    isFinal: true,
+                    isConfirmed: true
                 )
                 let preview = transcript.text.prefix(60)
-                logger.info("\(String(describing: source), privacy: .public) seg \(confirmed ? "✓" : "…", privacy: .public): \"\(String(preview), privacy: .public)\" speaker=\(item.3 ?? "-", privacy: .public)")
+                logger.info("\(String(describing: source), privacy: .public) seg ✓: \"\(String(preview), privacy: .public)\" speaker=\(item.3 ?? "-", privacy: .public)")
                 output.yield(transcript)
+            }
+
+            // Unconfirmed tail: merge all trailing segments into ONE
+            // composite segment per source per cycle. The UI treats the tail
+            // as a single replaceable slot per source (AppModel.liveTail),
+            // so emitting N small unconfirmed rows just gives the deduper
+            // more chances to miss-match and leave stale orphans behind.
+            // Concatenating here makes the "rolling Whisper tail" a single
+            // unambiguous thing.
+            let tailItems = flatSegments.suffix(from: cutoffIndex)
+            if let first = tailItems.first, let last = tailItems.last {
+                // Pick the dominant speaker label from the tail items
+                // (most likely the same across all of them — this just
+                // picks deterministically if not).
+                let speakerLabel = tailItems
+                    .compactMap { $0.3 }
+                    .first
+                let joined = tailItems
+                    .map { $0.0.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+                if !joined.isEmpty {
+                    let tail = TranscriptSegment(
+                        source: source,
+                        speaker: speakerLabel,
+                        text: joined,
+                        startTime: first.1,
+                        endTime: last.2,
+                        isFinal: false,
+                        isConfirmed: false
+                    )
+                    let preview = tail.text.prefix(60)
+                    logger.info("\(String(describing: source), privacy: .public) tail …: \"\(String(preview), privacy: .public)\" speaker=\(speakerLabel ?? "-", privacy: .public)")
+                    output.yield(tail)
+                }
             }
         } catch {
             logger.error("Inference failed: \(error.localizedDescription, privacy: .public)")

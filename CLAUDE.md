@@ -54,7 +54,10 @@ Four SwiftPM targets, layered:
 ```
 GijirokuCore  (no deps)         pure logic: AudioChunk, TranscriptSegment
                                 (with isConfirmed flag for the streaming
-                                tail), LLMClient protocol, OllamaClient,
+                                tail), TranscriptTurnGrouping (collapses
+                                segments into Notion-style speaker turns
+                                + attaches per-source live tail),
+                                LLMClient protocol, OllamaClient,
                                 SummaryEngine (appendDelta + consolidate
                                 + regenerate) / EventExtractor (think-tag
                                 stripping + balanced-JSON extraction +
@@ -95,8 +98,8 @@ GijirokuCLI                     headless runner for E2E pipeline tests
 
 1. `AppModel.startRecording` builds per-session engines from `SettingsModel` + `LibraryModel.shared.activeProjectID` (so settings/style/project changes take effect on next Start). It also writes an empty draft session immediately and kicks off a 30 s autosave loop (`Drafts/` directory under Application Support).
 2. `AudioCaptureEngine.start()` returns an `AsyncStream<AudioChunk>`. The same chunks are multicast to any `subscribeWaveform()` consumers (UI level meters).
-3. `WhisperTranscription.transcribe(_:)` consumes that stream, batches into a 25 s rolling buffer, and runs WhisperKit every `inferenceInterval` seconds (default 2 s — short cadence for live-stream feel). Each pass marks the last `requiredSegmentsForConfirmation` (default 2) segments as **unconfirmed** and everything older as **confirmed**, mirroring `AudioStreamTranscriber`'s policy. Optionally runs SpeakerKit on the same window. WhisperKit instances are cached at module level (`WhisperModelCache`) by `(modelName, vadEnabled, vadEnergyThreshold)`, and `App.init` kicks off a background preload so Start doesn't pay the 15–20 s cold-load cost.
-4. `AppModel.append(segment:)` runs the segments through `TranscriptDeduper`. The deduper merges by source + Jaccard similarity + ±12 s time gate, and applies a **confirmation-sticky** policy: once confirmed, a segment's text cannot be overwritten by a later unconfirmed rewrite. `pendingForSummary` only accumulates confirmed segments — unconfirmed text is never shown to the LLM.
+3. `WhisperTranscription.transcribe(_:)` consumes that stream, batches into a 25 s rolling buffer, and runs WhisperKit every `inferenceInterval` seconds (default 2 s — short cadence for live-stream feel). Each pass marks the last `requiredSegmentsForConfirmation` (default 2) segments as **unconfirmed** and everything older as **confirmed**, mirroring `AudioStreamTranscriber`'s policy. Confirmed segments emit individually so the deduper can match them across cycles; unconfirmed segments are **concatenated into a single composite tail segment per source per cycle** so the rolling Whisper tail is one unambiguous slot, not N small rows the deduper has to chase. Optionally runs SpeakerKit on the same window. WhisperKit instances are cached at module level (`WhisperModelCache`) by `(modelName, vadEnabled, vadEnergyThreshold)`, and `App.init` kicks off a background preload so Start doesn't pay the 15–20 s cold-load cost.
+4. `AppModel.append(segment:)` routes segments by confirmation: **unconfirmed → `liveTail[source]`** (replaced wholesale on every emission, never enters `transcript`); **confirmed → `TranscriptDeduper`** into `transcript` and `pendingForSummary`. The deduper merges by source + Jaccard similarity + ±12 s time gate. Receiving a new confirmed segment for a source clears that source's `liveTail` slot so the UI doesn't double-render the just-promoted region. The UI walks `transcript` + `liveTail` through `TranscriptTurnGrouping.turns(...)` to render Notion-style speaker-turn blocks (one block per consecutive same-speaker run; the rolling tail flows inline at the end of the most recent block as italicized secondary-color text).
 5. Every `summaryUpdateInterval` seconds (default 30 s) `flushSummaryWindow` calls `SummaryEngine.appendDelta` (append-only — the LLM sees only section titles + the delta and emits just new bullets), then `SummaryEngine.consolidate` (re-summarizes the resulting summary so semantic duplicates / over-density are folded — early-skip < 4 bullets, drastic-shrink guard), then `EventExtractor.extract` with the current open events for resolution detection. New events are merged with `EventMerger` (kind + 20-char-prefix dedupe; sticky `resolved` field). A draft snapshot is written to disk right after.
 6. On Stop, the autosave loop stops, `SummaryEngine.regenerate(transcript:)` runs once over the **confirmed-only** transcript to produce the polished saved summary, `generateTitle(transcript:)` asks the LLM for a ≤ 20-char title, then `Session(...)` is written via `FileSessionStore.save`. The draft is deleted on successful save. If the app crashes before this point, the next launch's `DraftRecovery.promoteOrphans` promotes any leftover draft into Sessions with a `[復元]` / `[Recovered]` title prefix.
 
@@ -116,7 +119,12 @@ OSLog `.info` / `.notice` are reliably suppressed when the app is launched as a 
 
 ### Confirmed vs. unconfirmed transcript segments
 
-`TranscriptSegment.isConfirmed` drives both the UI (unconfirmed rows render italic at ~55 % opacity so the live tail is visibly distinct) and the downstream pipeline. Anything that persists or feeds the LLM — autosave drafts, `pendingForSummary`, `runRegeneration`, the Stop-time full regenerate, `generateTitle` — operates on `confirmedTranscript` (a computed view that filters `transcript`). Without this filter, the rolling unconfirmed tail flips text every 2 s and the LLM produces flaky summaries / titles that don't stabilize.
+`TranscriptSegment.isConfirmed` drives the routing in `AppModel.append`:
+
+- **Unconfirmed** segments live in `AppModel.liveTail: [AudioSource: TranscriptSegment]` — one slot per source, replaced wholesale on each emission. They never enter `transcript`, `pendingForSummary`, draft sessions, or the LLM pipeline.
+- **Confirmed** segments go through `TranscriptDeduper` into `transcript`. Receiving a confirmed segment for a source clears that source's `liveTail` slot so the UI doesn't show duplicate "live" content alongside the just-promoted row.
+
+The UI groups `transcript` + `liveTail` into Notion-style speaker-turn blocks via `TranscriptTurnGrouping.turns(...)`. Within each turn block the confirmed prose flows continuously, and the rolling Whisper tail (if any) appears as italicized secondary-color text appended inline. This avoids the "many small rows + stale unconfirmed orphans" experience the rolling-window deduper used to produce.
 
 The Codable decoder defaults `isConfirmed` to `true` when missing, so sessions saved by older builds load as fully-confirmed transcripts.
 
