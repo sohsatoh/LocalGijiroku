@@ -75,13 +75,25 @@ public struct TranscriptDeduper {
             let sim = Self.similarity(existing.text, incoming.text)
             guard sim >= config.similarityThreshold else { continue }
             guard let idx = transcript.lastIndex(where: { $0.id == existing.id }) else { continue }
-            let preferLonger = incoming.text.count >= existing.text.count
-            let mergedText = preferLonger ? incoming.text : existing.text
+            // Confirmation policy: once a segment is confirmed, its text is
+            // immutable. An unconfirmed re-emission for the same region is
+            // just stale — the rolling-window transcriber will keep
+            // emitting it for a few more cycles until it slides out of
+            // the buffer. Don't let it overwrite the confirmed wording.
+            let mergedText: String
+            if existing.isConfirmed && !incoming.isConfirmed {
+                mergedText = existing.text
+            } else {
+                let preferLonger = incoming.text.count >= existing.text.count
+                mergedText = preferLonger ? incoming.text : existing.text
+            }
+            let mergedConfirmed = existing.isConfirmed || incoming.isConfirmed
             // If nothing actually changes, treat as a no-op.
             if mergedText == existing.text,
                incoming.startTime >= existing.startTime,
                incoming.endTime <= existing.endTime,
-               incoming.isFinal == existing.isFinal {
+               incoming.isFinal == existing.isFinal,
+               mergedConfirmed == existing.isConfirmed {
                 return .ignored
             }
             transcript[idx] = TranscriptSegment(
@@ -92,7 +104,8 @@ public struct TranscriptDeduper {
                 startTime: min(existing.startTime, incoming.startTime),
                 endTime: max(existing.endTime, incoming.endTime),
                 isFinal: incoming.isFinal || existing.isFinal,
-                confidence: incoming.confidence ?? existing.confidence
+                confidence: incoming.confidence ?? existing.confidence,
+                isConfirmed: mergedConfirmed
             )
             return .replaced(previousID: existing.id)
         }
@@ -130,7 +143,8 @@ public struct TranscriptDeduper {
                     startTime: min(existing.startTime, incoming.startTime),
                     endTime: max(existing.endTime, incoming.endTime),
                     isFinal: incoming.isFinal || existing.isFinal,
-                    confidence: incoming.confidence
+                    confidence: incoming.confidence,
+                    isConfirmed: existing.isConfirmed || incoming.isConfirmed
                 )
                 return .replaced(previousID: existing.id)
             }

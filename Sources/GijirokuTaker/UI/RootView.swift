@@ -244,7 +244,12 @@ private struct TranscriptRow: View {
                 }
                 Text(segment.text)
                     .textSelection(.enabled)
-                    .opacity(segment.isFinal ? 1.0 : 0.7)
+                    // Unconfirmed (still in Whisper's rolling tail) — render
+                    // dimmed and italic so the user sees the live stream
+                    // but isn't surprised when the wording gets rewritten
+                    // by the next inference pass.
+                    .italic(!segment.isConfirmed)
+                    .opacity(segment.isConfirmed ? 1.0 : 0.55)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

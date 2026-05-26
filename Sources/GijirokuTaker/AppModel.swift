@@ -81,6 +81,15 @@ final class AppModel: ObservableObject {
         return seen.count
     }
 
+    /// The confirmed-only view of the live transcript. Everything that goes
+    /// to disk (drafts, final session) or the LLM pipeline (summary,
+    /// regenerate, title) must use this — unconfirmed segments are the
+    /// rolling Whisper tail that may be rewritten on the next inference
+    /// cycle, so persisting or summarizing them produces unstable output.
+    private var confirmedTranscript: [TranscriptSegment] {
+        transcript.filter(\.isConfirmed)
+    }
+
     init() {
         let appSupport = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -130,7 +139,10 @@ final class AppModel: ObservableObject {
             title: L10n.string("meeting.in_progress_title"),
             startedAt: sessionStartedAt,
             endedAt: nil,
-            transcript: transcript,
+            // Drop the unconfirmed tail before writing — those segments
+            // can still be rewritten on the next inference cycle, and the
+            // recovery path treats the draft as authoritative.
+            transcript: confirmedTranscript,
             summary: summary,
             events: events
         )
@@ -354,13 +366,29 @@ final class AppModel: ObservableObject {
         let outcome = transcriptDeduper.merge(segment, into: &transcript)
         switch outcome {
         case .appended:
-            // 新規 → サマリ用にも積む
-            pendingForSummary.append(segment)
+            // 確定済みのみサマリ用 buffer に積む。未確定セグメントは次のサイクルで
+            // 書き換えられる可能性があるので LLM パイプラインに渡さない。
+            // 後で `.replaced` で confirmed=true へ昇格した瞬間にここに入る。
+            if segment.isConfirmed {
+                pendingForSummary.append(segment)
+            }
         case .replaced(let previousID):
-            // 既存セグメントが上書きされた → サマリ用 buffer 内の同じ id を新しい text に更新
-            if let merged = transcript.first(where: { $0.id == previousID }),
-               let pIdx = pendingForSummary.firstIndex(where: { $0.id == previousID }) {
-                pendingForSummary[pIdx] = merged
+            // 既存セグメントが上書きされた → サマリ用 buffer の同じ id を最新版に置換。
+            // 未確定 → 確定への昇格でも同じ枝に入るので、初めて pendingForSummary に
+            // 追加されるのはこの瞬間。append しているわけではないので findIndex で
+            // 既存があれば更新、無ければ新規追加。
+            guard let merged = transcript.first(where: { $0.id == previousID }) else { break }
+            if let pIdx = pendingForSummary.firstIndex(where: { $0.id == previousID }) {
+                if merged.isConfirmed {
+                    pendingForSummary[pIdx] = merged
+                } else {
+                    // Downgrade is impossible (deduper's confirmation is sticky)
+                    // so this branch only fires when the existing entry was
+                    // already confirmed — keep it.
+                    pendingForSummary[pIdx] = merged
+                }
+            } else if merged.isConfirmed {
+                pendingForSummary.append(merged)
             }
         case .ignored:
             break
@@ -449,7 +477,9 @@ final class AppModel: ObservableObject {
 
     private func runRegeneration() async {
         guard let summaryEngine, let eventExtractor else { return }
-        let segments = transcript
+        // Use the confirmed-only view — the rolling unconfirmed tail would
+        // change the LLM's output between turns and produce flaky summaries.
+        let segments = confirmedTranscript
         logger.info("regenerateSummary: full transcript \(segments.count, privacy: .public) segments")
         summary = CumulativeSummary()
         events.removeAll()
@@ -527,21 +557,26 @@ final class AppModel: ObservableObject {
 
     private func persistFinalSession() async {
         await flushSummaryWindow()
+        // From here on the recording is stopped, so the unconfirmed tail
+        // will never get a chance to be promoted by a later inference
+        // pass. Drop it once for the rest of the function so the saved
+        // session and the final regenerate both see the same clean view.
+        let finalTranscript = confirmedTranscript
         // Replace the delta-built running summary with a fresh full-pass
         // summary over the entire transcript. The recording-time deltas
         // are cheap but only see one window at a time; the full pass can
         // restructure / merge / promote bullets across the whole meeting
         // so the saved artifact is the polished Notion-style output.
-        if let summaryEngine, !transcript.isEmpty {
-            summaryProgress = .summarizing(segmentCount: transcript.count)
+        if let summaryEngine, !finalTranscript.isEmpty {
+            summaryProgress = .summarizing(segmentCount: finalTranscript.count)
             do {
-                summary = try await summaryEngine.regenerate(transcript: transcript)
+                summary = try await summaryEngine.regenerate(transcript: finalTranscript)
             } catch {
                 logger.error("Final regenerate failed (keeping delta summary): \(error.localizedDescription, privacy: .public)")
             }
         }
         summaryProgress = .generatingTitle
-        let title = await generateTitle()
+        let title = await generateTitle(transcript: finalTranscript)
         let projectID = LibraryModel.shared.activeProjectID
         let session = Session(
             id: sessionId,
@@ -549,7 +584,7 @@ final class AppModel: ObservableObject {
             title: title,
             startedAt: sessionStartedAt,
             endedAt: .now,
-            transcript: transcript,
+            transcript: finalTranscript,
             summary: summary,
             events: events
         )
@@ -591,7 +626,7 @@ final class AppModel: ObservableObject {
     /// Generates a short meeting title via the LLM and prefixes it with the
     /// session date (yyyy-MM-dd). The date is always present even when the
     /// LLM call fails, per the user requirement.
-    private func generateTitle() async -> String {
+    private func generateTitle(transcript: [TranscriptSegment]) async -> String {
         let datePrefix = Self.dateFormatter.string(from: sessionStartedAt)
         let fallback = L10n.string("meeting.default_title")
         guard !transcript.isEmpty, let client else {

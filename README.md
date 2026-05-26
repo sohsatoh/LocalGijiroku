@@ -9,10 +9,12 @@ A local-first meeting recorder for macOS. Records your audio, transcribes it wit
 ## What it does
 
 - Captures **microphone audio** and **system audio** simultaneously (so the other side of Zoom / Meet calls is included).
-- Streams audio through **WhisperKit** for real-time, multilingual transcription (Japanese and English tuned).
-- Every 30 seconds, hands the new transcript to a **local LLM** (MLX or Ollama) for:
-  - a rolling **summary** that updates section-by-section as topics shift, and
-  - extraction of structured **events** (questions / decisions / action items, with owner + due date when stated).
+- Streams audio through **WhisperKit** for real-time, multilingual transcription (Japanese and English tuned). The live transcript shows confirmed text alongside an italicized, dimmed "unconfirmed tail" so you can see the rolling Whisper output the moment it lands; confirmed segments are what get saved and shown to the LLM.
+- Every 30 seconds, hands new confirmed transcript to a **local LLM** (MLX or Ollama) for:
+  - an append-only **summary** update (LLM only sees existing section titles + new transcript and emits just the new bullets), followed by a consolidation pass that folds semantic duplicates — keeps per-turn cost roughly constant for hour-long meetings.
+  - extraction of structured **events** (topics / questions / decisions / action items, with owner + due date when stated), including resolution detection against open items.
+- On Stop, a full-pass **regenerate** rewrites the saved summary from the entire transcript in one shot, so the saved artifact is polished even though the live deltas were cheap.
+- Crash-safe **autosave** writes the in-progress recording to a `Drafts/` directory every 30 seconds and after each LLM turn. If the app crashes / is force-quit / loses power, the next launch automatically promotes the orphan back into Sessions with a `[復元]` / `[Recovered]` title prefix.
 - Optional **speaker diarization** via Pyannote (SpeakerKit), with cross-window label persistence by time-overlap clustering.
 - Sessions are organized into **projects**, stored on disk as plain JSON, exportable as Markdown via a customizable template.
 - Per-session, per-project, and user-level **summary style templates** (bullet word limits, section caps, extra instructions for the LLM).
@@ -64,7 +66,7 @@ The first time you select an MLX model, ~2–5 GB will download from HuggingFace
 ## Tests
 
 ```bash
-swift test                                       # ~70 hermetic unit tests
+swift test                                       # ~105 hermetic unit tests
 RUN_OLLAMA_TESTS=1 swift test --filter ollama    # live Ollama integration
 .build/debug/GijirokuCLI /path/to/audio.wav      # headless E2E from a WAV
 ```

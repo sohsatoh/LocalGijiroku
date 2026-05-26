@@ -105,14 +105,25 @@ public actor WhisperTranscription: TranscriptionEngine {
         /// benefits from a higher value to filter background hiss.
         public let vadEnergyThreshold: Float
 
+        /// Number of trailing segments per source kept as unconfirmed each
+        /// inference cycle. Matches WhisperKit's `AudioStreamTranscriber`
+        /// default of 2 — the most recent ~10 s of speech is still in the
+        /// "may be rewritten by the next pass" zone, everything older is
+        /// promoted to confirmed.
+        public let requiredSegmentsForConfirmation: Int
+
         public init(
             modelName: String = "large-v3-v20240930_626MB",
             language: String = "ja",
             windowSeconds: TimeInterval = 25,
-            inferenceInterval: TimeInterval = 5,
+            // 2 s feels live (~5× the previous 5 s polling cadence) and the
+            // 626 MB large-v3-turbo model finishes a 25 s window in well
+            // under 2 s on Apple Silicon, so the loop doesn't fall behind.
+            inferenceInterval: TimeInterval = 2,
             diarizationEnabled: Bool = false,
             vadEnabled: Bool = true,
-            vadEnergyThreshold: Float = 0.02
+            vadEnergyThreshold: Float = 0.02,
+            requiredSegmentsForConfirmation: Int = 2
         ) {
             self.modelName = modelName
             self.language = language
@@ -121,6 +132,7 @@ public actor WhisperTranscription: TranscriptionEngine {
             self.diarizationEnabled = diarizationEnabled
             self.vadEnabled = vadEnabled
             self.vadEnergyThreshold = vadEnergyThreshold
+            self.requiredSegmentsForConfirmation = requiredSegmentsForConfirmation
         }
     }
 
@@ -371,29 +383,47 @@ public actor WhisperTranscription: TranscriptionEngine {
                 labelMap = await speakerTracker.resolve(spans: absoluteSpans)
             }
 
-            for result in results {
-                for seg in result.segments {
+            // Flatten + sort so the confirmation split below treats the
+            // segments in chronological order, regardless of how the
+            // WhisperKit result was chunked internally.
+            let flatSegments: [(TranscriptionSegment, Date, Date, String?)] = results.flatMap { result in
+                result.segments.compactMap { seg in
                     let raw: String = seg.text
                     let text = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                    guard !text.isEmpty else { continue }
-                    if Self.hallucinationPatterns.contains(text) { continue }
+                    guard !text.isEmpty else { return nil }
+                    if Self.hallucinationPatterns.contains(text) { return nil }
                     let segStart = bufferStartedAt.addingTimeInterval(TimeInterval(seg.start))
                     let segEnd = bufferStartedAt.addingTimeInterval(TimeInterval(seg.end))
                     let midpoint = (Double(seg.start) + Double(seg.end)) / 2
                     let localSpeaker = Self.speaker(at: midpoint, in: speakerSpans)
                     let stableSpeaker = localSpeaker.flatMap { labelMap[$0] } ?? localSpeaker
-                    let transcript = TranscriptSegment(
-                        source: source,
-                        speaker: stableSpeaker,
-                        text: text,
-                        startTime: segStart,
-                        endTime: segEnd,
-                        isFinal: false
-                    )
-                    let preview = text.prefix(60)
-                    logger.info("\(String(describing: source), privacy: .public) seg: \"\(String(preview), privacy: .public)\" speaker=\(stableSpeaker ?? "-", privacy: .public)")
-                    output.yield(transcript)
+                    return (seg, segStart, segEnd, stableSpeaker)
                 }
+            }.sorted { $0.1 < $1.1 }
+
+            // Streaming confirmation policy: the last
+            // `requiredSegmentsForConfirmation` segments stay unconfirmed
+            // (Whisper may rewrite them once more audio arrives), the rest
+            // are stable enough to confirm. Mirrors AudioStreamTranscriber's
+            // approach without taking over the audio pipeline. Downstream
+            // (TranscriptDeduper, autosave filter, LLM pipelines) keys off
+            // `isConfirmed` to keep unstable text out of saved state.
+            let unconfirmedTail = config.requiredSegmentsForConfirmation
+            let cutoffIndex = max(0, flatSegments.count - unconfirmedTail)
+            for (i, item) in flatSegments.enumerated() {
+                let confirmed = i < cutoffIndex
+                let transcript = TranscriptSegment(
+                    source: source,
+                    speaker: item.3,
+                    text: item.0.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
+                    startTime: item.1,
+                    endTime: item.2,
+                    isFinal: confirmed,
+                    isConfirmed: confirmed
+                )
+                let preview = transcript.text.prefix(60)
+                logger.info("\(String(describing: source), privacy: .public) seg \(confirmed ? "✓" : "…", privacy: .public): \"\(String(preview), privacy: .public)\" speaker=\(item.3 ?? "-", privacy: .public)")
+                output.yield(transcript)
             }
         } catch {
             logger.error("Inference failed: \(error.localizedDescription, privacy: .public)")
