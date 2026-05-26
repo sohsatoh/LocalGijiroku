@@ -7,21 +7,21 @@ import Foundation
 /// to a specific participant.
 ///
 /// Format per line:
-///   `[<speaker or source>] <text>`
+///   `[<speaker>] <text>`  — when diarization produced a stable label
+///   `<text>`              — when no speaker is known
 ///
-/// Examples:
-///   `[Speaker_1] We should ship next week.`
-///   `[microphone] (when no diarization label is available)`
+/// We deliberately do NOT fall back to the `AudioSource.rawValue`
+/// (`microphone` / `system`). Those are capture-layer concerns, not speakers
+/// — feeding them as `[system]` previously caused LLMs to echo `[system]`
+/// prefixes into summary bullets, which is meaningless to the reader.
 public enum TranscriptFormatting {
     public static func toPromptLines(_ segments: [TranscriptSegment]) -> String {
         segments.map { seg in
-            let label = seg.speaker?.nilIfEmpty ?? seg.source.rawValue
-            return "[\(label)] \(seg.text)"
+            if let label = seg.speaker, !label.isEmpty {
+                return "[\(label)] \(seg.text)"
+            }
+            return seg.text
         }
         .joined(separator: "\n")
     }
-}
-
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

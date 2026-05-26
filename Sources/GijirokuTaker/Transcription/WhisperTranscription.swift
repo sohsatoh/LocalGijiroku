@@ -360,27 +360,38 @@ public actor WhisperTranscription: TranscriptionEngine {
             let totalSegments = results.reduce(0) { $0 + $1.segments.count }
             logger.info("\(String(describing: source), privacy: .public) result: results=\(results.count, privacy: .public) segments=\(totalSegments, privacy: .public)")
 
-            // Optionally run speaker diarization over the same audio window.
-            // Two-step labeling:
-            //   1. Local (per-window) diarization gives us
-            //      [(start, end, "speakerId(0)"), ...]
-            //   2. SpeakerTracker maps those window-local labels into stable
-            //      cross-window labels ("Speaker 1", "Speaker 2", ...) by
-            //      finding the historical stable span that has maximum time
-            //      overlap with the new local span.
-            let speakerSpans = await diarizationSpans(samples: samples)
+            // Speaker labeling strategy depends on the capture source:
+            //   - microphone is by definition the local user. Running pyannote
+            //     on a single-speaker stream wastes CPU and, worse, its
+            //     window-local cluster labels would collide with system-side
+            //     labels in SpeakerTracker — so we short-circuit to a fixed
+            //     localized "あなた" / "You" label (only when the user has
+            //     opted into speaker attribution overall).
+            //   - system audio is where multiple remote participants live;
+            //     diarize it through pyannote + SpeakerTracker as before.
+            let speakerSpans: [SpeakerSpan]
             let labelMap: [String: String]
-            if speakerSpans.isEmpty {
+            let fixedLabel: String?
+            switch source {
+            case .microphone:
+                speakerSpans = []
                 labelMap = [:]
-            } else {
-                let absoluteSpans = speakerSpans.map { span in
-                    SpeakerTracker.AbsoluteSpan(
-                        start: bufferStartedAt.addingTimeInterval(span.start),
-                        end: bufferStartedAt.addingTimeInterval(span.end),
-                        localLabel: span.speaker
-                    )
+                fixedLabel = config.diarizationEnabled ? L10n.string("speaker.you") : nil
+            case .system:
+                fixedLabel = nil
+                speakerSpans = await diarizationSpans(samples: samples)
+                if speakerSpans.isEmpty {
+                    labelMap = [:]
+                } else {
+                    let absoluteSpans = speakerSpans.map { span in
+                        SpeakerTracker.AbsoluteSpan(
+                            start: bufferStartedAt.addingTimeInterval(span.start),
+                            end: bufferStartedAt.addingTimeInterval(span.end),
+                            localLabel: span.speaker
+                        )
+                    }
+                    labelMap = await speakerTracker.resolve(spans: absoluteSpans)
                 }
-                labelMap = await speakerTracker.resolve(spans: absoluteSpans)
             }
 
             // Flatten + sort so the confirmation split below treats the
@@ -394,9 +405,14 @@ public actor WhisperTranscription: TranscriptionEngine {
                     if Self.hallucinationPatterns.contains(text) { return nil }
                     let segStart = bufferStartedAt.addingTimeInterval(TimeInterval(seg.start))
                     let segEnd = bufferStartedAt.addingTimeInterval(TimeInterval(seg.end))
-                    let midpoint = (Double(seg.start) + Double(seg.end)) / 2
-                    let localSpeaker = Self.speaker(at: midpoint, in: speakerSpans)
-                    let stableSpeaker = localSpeaker.flatMap { labelMap[$0] } ?? localSpeaker
+                    let stableSpeaker: String?
+                    if let fixedLabel {
+                        stableSpeaker = fixedLabel
+                    } else {
+                        let midpoint = (Double(seg.start) + Double(seg.end)) / 2
+                        let localSpeaker = Self.speaker(at: midpoint, in: speakerSpans)
+                        stableSpeaker = localSpeaker.flatMap { labelMap[$0] } ?? localSpeaker
+                    }
                     return (seg, segStart, segEnd, stableSpeaker)
                 }
             }.sorted { $0.1 < $1.1 }

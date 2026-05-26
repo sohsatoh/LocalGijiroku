@@ -16,6 +16,9 @@
 "recording.toggle_mic" = "マイクの取り込みを切替 (録音中も変更可)";
 "recording.toggle_system" = "システム音声の取り込みを切替 (録音中も変更可)";
 
+/* === Speaker labels === */
+"speaker.you" = "あなた";
+
 /* === Sidebar === */
 "sidebar.unfiled" = "未分類";
 "sidebar.no_recordings" = "（なし）";

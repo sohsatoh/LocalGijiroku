@@ -16,6 +16,9 @@
 "recording.toggle_mic" = "Toggle microphone capture (works during recording)";
 "recording.toggle_system" = "Toggle system audio capture (works during recording)";
 
+/* === Speaker labels === */
+"speaker.you" = "You";
+
 /* === Sidebar === */
 "sidebar.unfiled" = "Unfiled";
 "sidebar.no_recordings" = "(none)";
