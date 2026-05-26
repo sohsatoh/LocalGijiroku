@@ -46,6 +46,14 @@ public struct TranscriptDeduper {
         /// どのような話が…" even though their symmetric Jaccard is well
         /// below 0.7 (the long one drags the union size up).
         public var subsumptionThreshold: Float
+        /// Fraction of the shorter segment's duration that has to be
+        /// covered by the other for the deduper to treat them as the
+        /// same audio region. Robust against text drift between
+        /// Whisper cycles: when "都がですね10年ぶりに" and "1年ぶりに
+        /// 1、6月期…" share the same audio span but split it into
+        /// completely different text, no string-similarity metric
+        /// touches them — the time-overlap signal does.
+        public var timeOverlapThreshold: Float
 
         public init(
             lookbackWindow: Int = 8,
@@ -53,7 +61,8 @@ public struct TranscriptDeduper {
             maxStartTimeDelta: TimeInterval = 12,
             crossSourceBleedSuppression: Bool = true,
             crossSourceTimeDelta: TimeInterval = 6,
-            subsumptionThreshold: Float = 0.7
+            subsumptionThreshold: Float = 0.7,
+            timeOverlapThreshold: Float = 0.5
         ) {
             self.lookbackWindow = lookbackWindow
             self.similarityThreshold = similarityThreshold
@@ -61,6 +70,7 @@ public struct TranscriptDeduper {
             self.crossSourceBleedSuppression = crossSourceBleedSuppression
             self.crossSourceTimeDelta = crossSourceTimeDelta
             self.subsumptionThreshold = subsumptionThreshold
+            self.timeOverlapThreshold = timeOverlapThreshold
         }
     }
 
@@ -97,20 +107,37 @@ public struct TranscriptDeduper {
         // are still ≥ 70 % present in the longer side. Without this the
         // user kept seeing two near-duplicate rows because primary match
         // missed, and the post-merge sweep never ran.
+        // Match criteria (any one is sufficient):
+        //   1. Significant TIME OVERLAP — same audio decoded by different
+        //      rolling-window cycles. Text can drift arbitrarily ("10年"
+        //      → "1年", chunk boundaries shift), but the start/end times
+        //      stay anchored to the same audio sample range. This is the
+        //      most robust signal for the rolling-decoder case.
+        //   2. mergeSignal ≥ threshold — symmetric Jaccard or directional
+        //      bigram containment. Catches cases where time-stamps drift
+        //      but text overlaps substantially.
+        //   3. Time delta within `maxStartTimeDelta` AND mergeSignal
+        //      meets threshold — the original same-source same-region
+        //      check, kept as a fallback.
         let incomingBigrams = Self.charBigrams(of: incoming.text)
         let lookbackStart = max(0, transcript.count - config.lookbackWindow)
         var matchingIndices: [Int] = []
         for i in lookbackStart..<transcript.count {
             let existing = transcript[i]
             guard existing.source == incoming.source else { continue }
+            let overlapRatio = Self.timeOverlapRatio(existing, incoming)
             let timeDelta = abs(existing.startTime.timeIntervalSince(incoming.startTime))
-            guard timeDelta <= config.maxStartTimeDelta else { continue }
-            let signal = Self.mergeSignal(
-                existing: existing.text,
-                incoming: incoming.text,
-                incomingBigrams: incomingBigrams
-            )
-            guard signal >= config.similarityThreshold else { continue }
+            // Time-overlap path: ≥ 50 % of the shorter segment's duration
+            // is shared with the other → same audio. No text similarity
+            // needed; chunking can shift wildly between cycles.
+            let timeOverlapMatch = overlapRatio >= config.timeOverlapThreshold
+            // Text-similarity path: same source within the time gate AND
+            // the merge signal passes.
+            let textSignal = (timeDelta <= config.maxStartTimeDelta)
+                ? Self.mergeSignal(existing: existing.text, incoming: incoming.text, incomingBigrams: incomingBigrams)
+                : 0
+            let textMatch = textSignal >= config.similarityThreshold
+            guard timeOverlapMatch || textMatch else { continue }
             matchingIndices.append(i)
         }
 
@@ -129,8 +156,14 @@ public struct TranscriptDeduper {
         if primary.isConfirmed && !incoming.isConfirmed {
             mergedText = primary.text
         } else {
-            let preferLonger = incoming.text.count >= primary.text.count
-            mergedText = preferLonger ? incoming.text : primary.text
+            // smartConcatMerge handles the rolling-window overlap case:
+            // when one's tail and the other's head share substantial
+            // content (the LCS), splice them so neither side's unique
+            // segment of audio is dropped. Falls back to "longer wins"
+            // for non-boundary overlaps where splicing would risk
+            // mid-sentence corruption. Chronological order is implied
+            // by feeding `primary` (older / lower index) first.
+            mergedText = Self.smartConcatMerge(primary.text, incoming.text)
         }
         let mergedConfirmed = primary.isConfirmed || incoming.isConfirmed
 
@@ -209,6 +242,98 @@ public struct TranscriptDeduper {
         guard !otherBigrams.isEmpty else { return false }
         let inter = otherBigrams.intersection(mergedBigrams).count
         return Float(inter) / Float(otherBigrams.count) >= threshold
+    }
+
+    /// Intersection / shorter-span ratio of two segments' time ranges.
+    /// 0 when disjoint, 1 when one fully covers the other. Used as the
+    /// primary "same audio" signal — robust against the text drift the
+    /// rolling Whisper decoder produces between cycles.
+    static func timeOverlapRatio(_ a: TranscriptSegment, _ b: TranscriptSegment) -> Float {
+        let aSpan = a.endTime.timeIntervalSince(a.startTime)
+        let bSpan = b.endTime.timeIntervalSince(b.startTime)
+        guard aSpan > 0, bSpan > 0 else { return 0 }
+        let overlapStart = max(a.startTime, b.startTime)
+        let overlapEnd = min(a.endTime, b.endTime)
+        let overlap = overlapEnd.timeIntervalSince(overlapStart)
+        guard overlap > 0 else { return 0 }
+        return Float(overlap / min(aSpan, bSpan))
+    }
+
+    /// Merge two strings that represent overlapping audio decoded into
+    /// slightly different text by different rolling-window cycles.
+    /// `a` is the older (transcript-resident) text, `b` is the incoming
+    /// one. Uses the longest common substring (LCS) to splice the unique
+    /// prefix of one and unique suffix of the other when the LCS sits
+    /// at the boundary (typical "rolling overlap" pattern). Falls back
+    /// to "longer wins, ties go to incoming" when the LCS is too short
+    /// or sits in the middle — incoming wins ties because the newer
+    /// inference cycle had more decoder context.
+    static func smartConcatMerge(_ a: String, _ b: String) -> String {
+        if a == b { return a }
+        if a.contains(b) { return a }
+        if b.contains(a) { return b }
+        let (lcsLen, aOffset, bOffset) = longestCommonSubstring(a, b)
+        // Require at least 3 chars of overlap to attempt a splice — keeps
+        // unrelated short coincidences from triggering concatenation.
+        guard lcsLen >= 3 else {
+            return b.count >= a.count ? b : a
+        }
+        let aChars = Array(a)
+        let bChars = Array(b)
+        let aTail = aChars.count - (aOffset + lcsLen)
+        let bHead = bOffset
+        let aHead = aOffset
+        let bTail = bChars.count - (bOffset + lcsLen)
+        // Strict boundary: LCS must sit at the EXACT end of one side and
+        // the EXACT start of the other to count as a clean rolling
+        // overlap. Any unique-content prefix on the "next" side (e.g.
+        // "10年" → "1年" — the leading digit is different content, not
+        // a punctuation tag-along) means the LCS isn't a chronological
+        // boundary; it's two different decodings of the same audio,
+        // and splicing would preserve a misheard prefix or suffix from
+        // the older version. Fall through to "longer wins" in that case.
+        // a's LCS at end + b's LCS at start → a comes first, append b's
+        // tail.
+        if aTail == 0, bHead == 0 {
+            return String(aChars.prefix(aOffset + lcsLen)) + String(bChars.suffix(bTail))
+        }
+        // b's LCS at end + a's LCS at start → b comes first, append a's
+        // tail.
+        if bTail == 0, aHead == 0 {
+            return String(bChars.prefix(bOffset + lcsLen)) + String(aChars.suffix(aTail))
+        }
+        // LCS interior of either side, or unique content on the "wrong"
+        // edge — splicing risks preserving an older misheard fragment.
+        // Prefer the longer text and let the sweep prune the other.
+        // Ties go to incoming (newer) on the theory that the more recent
+        // inference cycle had more decoder context.
+        return b.count >= a.count ? b : a
+    }
+
+    /// Returns (lcs.length, a's start index of LCS, b's start index of LCS).
+    /// Classic O(n*m) dynamic programming over character arrays, which is
+    /// fine for transcript-segment-sized strings (< 100 chars each).
+    static func longestCommonSubstring(_ a: String, _ b: String) -> (length: Int, aOffset: Int, bOffset: Int) {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        guard !aChars.isEmpty, !bChars.isEmpty else { return (0, 0, 0) }
+        var dp = Array(repeating: Array(repeating: 0, count: bChars.count + 1), count: aChars.count + 1)
+        var best = 0
+        var bestAEnd = 0
+        var bestBEnd = 0
+        for i in 1...aChars.count {
+            for j in 1...bChars.count {
+                if aChars[i - 1] == bChars[j - 1] {
+                    dp[i][j] = dp[i - 1][j - 1] + 1
+                    if dp[i][j] > best {
+                        best = dp[i][j]
+                        bestAEnd = i
+                        bestBEnd = j
+                    }
+                }
+            }
+        }
+        return (best, bestAEnd - best, bestBEnd - best)
     }
 
     /// Merge-eligibility signal between an existing transcript entry and

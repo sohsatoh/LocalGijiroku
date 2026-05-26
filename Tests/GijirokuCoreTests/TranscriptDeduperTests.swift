@@ -219,8 +219,109 @@ import Foundation
         into: &transcript
     )
     #expect(transcript.count == 1)
-    // The longer text wins — preserves the upstream context.
-    #expect(transcript[0].text == "私の方からご説明させていただいたのは")
+    // Smart concat preserves the longer's prefix and the shorter's
+    // trailing punctuation, since both sides have unique content the
+    // other lacks. The 、 from the trailing fragment is kept.
+    #expect(transcript[0].text == "私の方からご説明させていただいたのは、")
+}
+
+// MARK: - Time-overlap + LCS smart concat
+
+@Test func mergesViaTimeOverlapWhenTextSimilarityFails() {
+    // Real-world: cycle N decodes audio as "都がですね10年ぶりに" at
+    // [t0..t0+3]; cycle N+1 decodes the same audio region as
+    // "1年ぶりに1、6月期…" at [t0..t0+12] (extended chunking).
+    // Symmetric Jaccard / directional bigram both miss because text
+    // diverges too much. Time-overlap signal catches it.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript = [TranscriptSegment(
+        source: .system,
+        text: "都がですね10年ぶりに",
+        startTime: now,
+        endTime: now.addingTimeInterval(3),
+        isFinal: true
+    )]
+    _ = deduper.merge(
+        TranscriptSegment(
+            source: .system,
+            text: "1年ぶりに1、6月期ですけれども、プラス0.3と、プラスに転じたということをお伝えをいたしました。",
+            startTime: now,
+            endTime: now.addingTimeInterval(12),
+            isFinal: true
+        ),
+        into: &transcript
+    )
+    #expect(transcript.count == 1)
+    // The merge picks the longer text (LCS sits in the middle of the
+    // shorter, mid-sentence — splicing is too risky there).
+    #expect(transcript[0].text.contains("プラスに転じた"))
+}
+
+@Test func smartConcatPreservesUniquePrefixAndSuffix() {
+    // The "rolling overlap" pattern: existing ends with the LCS, new
+    // starts with it. The merge splices unique prefix + LCS + unique
+    // suffix so neither side's content is dropped.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript = [TranscriptSegment(
+        source: .microphone,
+        text: "私の方からご説明させていただいたのは",
+        startTime: now,
+        endTime: now.addingTimeInterval(4),
+        isFinal: true
+    )]
+    _ = deduper.merge(
+        TranscriptSegment(
+            source: .microphone,
+            text: "させていただいたのは、先日国が発表されました",
+            startTime: now.addingTimeInterval(2),
+            endTime: now.addingTimeInterval(8),
+            isFinal: true
+        ),
+        into: &transcript
+    )
+    #expect(transcript.count == 1)
+    // Both sides' unique content is preserved.
+    #expect(transcript[0].text == "私の方からご説明させていただいたのは、先日国が発表されました")
+}
+
+@Test func timeOverlapDoesNotMergeNonOverlappingSegments() {
+    // Adjacent but non-overlapping segments must stay separate — they
+    // represent different utterances.
+    let deduper = TranscriptDeduper()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    var transcript = [TranscriptSegment(
+        source: .microphone,
+        text: "おはようございます",
+        startTime: now,
+        endTime: now.addingTimeInterval(2),
+        isFinal: true
+    )]
+    _ = deduper.merge(
+        TranscriptSegment(
+            source: .microphone,
+            text: "予算会議を始めましょう",
+            // 1 second gap — no overlap.
+            startTime: now.addingTimeInterval(3),
+            endTime: now.addingTimeInterval(6),
+            isFinal: true
+        ),
+        into: &transcript
+    )
+    #expect(transcript.count == 2)
+}
+
+@Test func longestCommonSubstringFindsBoundaryRun() {
+    let result = TranscriptDeduper.longestCommonSubstring(
+        "私の方からご説明させていただいたのは",
+        "させていただいたのは、先日国が発表されました"
+    )
+    #expect(result.length == 10) // させていただいたのは
+    // In a, it starts at char index 8 (after "私の方からご説明")
+    #expect(result.aOffset == 8)
+    // In b, it starts at index 0.
+    #expect(result.bOffset == 0)
 }
 
 @Test func directionalFloorIgnoresTrivialBigramMatchWithDistinctText() {
@@ -477,8 +578,9 @@ private func segment(_ text: String, source: AudioSource = .microphone, start: T
 @Test func unrelatedSegmentsBothKept() {
     let dedup = TranscriptDeduper()
     var list: [TranscriptSegment] = []
-    _ = dedup.merge(segment("田中さんは来週金曜日までに更新してください"), into: &list)
-    let outcome = dedup.merge(segment("予算については来週改めて議論することにします"), into: &list)
+    _ = dedup.merge(segment("田中さんは来週金曜日までに更新してください", start: 0, duration: 3), into: &list)
+    // Distinct time range — two unrelated utterances back-to-back.
+    let outcome = dedup.merge(segment("予算については来週改めて議論することにします", start: 4, duration: 3), into: &list)
     #expect(outcome == .appended)
     #expect(list.count == 2)
 }
@@ -497,11 +599,16 @@ private func segment(_ text: String, source: AudioSource = .microphone, start: T
 @Test func windowLimitsLookback() {
     let dedup = TranscriptDeduper(config: .init(lookbackWindow: 2))
     var list: [TranscriptSegment] = []
-    _ = dedup.merge(segment("alpha beta gamma"), into: &list)
-    _ = dedup.merge(segment("delta epsilon"), into: &list)
-    _ = dedup.merge(segment("zeta eta theta"), into: &list)
-    // "alpha beta gamma" は window 外なので、もう一度来ても上書きされず追加される
-    let outcome = dedup.merge(segment("alpha beta gamma"), into: &list)
+    // Each segment in its own non-overlapping time slot so the
+    // lookback-window cap is what gates the lookup, not the time-
+    // overlap signal.
+    _ = dedup.merge(segment("alpha beta gamma", start: 0, duration: 2), into: &list)
+    _ = dedup.merge(segment("delta epsilon", start: 3, duration: 2), into: &list)
+    _ = dedup.merge(segment("zeta eta theta", start: 6, duration: 2), into: &list)
+    // "alpha beta gamma" sits outside the 2-entry lookback window now,
+    // and its [0..2] time range no longer touches the latest entries'
+    // ranges, so a repeat at a fresh time slot must append.
+    let outcome = dedup.merge(segment("alpha beta gamma", start: 9, duration: 2), into: &list)
     #expect(outcome == .appended)
     #expect(list.count == 4)
 }
