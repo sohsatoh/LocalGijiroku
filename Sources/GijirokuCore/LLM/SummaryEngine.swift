@@ -360,13 +360,36 @@ enum SummaryPrompt {
             ? ""
             : "\n\nAdditional user instructions:\n\(style.extraSummaryInstructions)"
         let system = """
-        You are a meeting note-taker. You receive the current cumulative
-        summary as JSON and new transcript segments since the last update.
-        Output JSON only, with no prose and no markdown fences.
+        You are a meeting note-taker modelled on Notion AI Meeting Notes.
+        You receive the current cumulative summary as JSON and new
+        transcript segments since the last update. Output JSON only, with
+        no prose and no markdown fences.
 
         REQUIRED top-level shape — never omit the envelope, never return a
         bare section object, never return a bare array:
         {"sections":[{"title":string,"bullets":[string]}]}
+
+        Section structure (Notion-style):
+        - Organize bullets under topical sections that reflect what was
+          ACTUALLY discussed (e.g. "プロジェクトX 進捗", "採用方針",
+          "技術選定の議論"). Avoid generic catch-alls like "その他" or
+          "全体" unless absolutely necessary.
+        - DO NOT create sections that duplicate the Action Items /
+          Decisions / Open Questions / Suggested Topics panels — those
+          live elsewhere. The summary is the DISCUSSION, not the
+          extracted to-dos. e.g. don't add a section titled "決定事項"
+          or "アクション" or "質問".
+
+        Bullet quality (Notion-style granularity):
+        - Atomic: one fact / point per bullet. Split combined statements.
+        - Specific & self-contained: a bullet should be meaningful even
+          if read in isolation. Bad: "X について議論". Good: "X の
+          リリース時期は来期Q3に後ろ倒し、理由は依存ライブラリ未対応".
+        - Substance over recap: prefer the WHY / context / reasoning over
+          surface restatement. Capture positions taken, trade-offs raised,
+          and concerns voiced.
+        - Skip small talk, greetings, and filler. Skip restating what's
+          already explicit in a Decision / Action / Question event.
 
         Merging rules (critical — read carefully):
         - The returned JSON is the FULL updated summary, NOT a delta.

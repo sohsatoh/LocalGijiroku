@@ -49,3 +49,65 @@ import Foundation
     #expect(events.count == 1)
     #expect(events[0].kind == .action)
 }
+
+@Test func renderOpenEventsIsEmptyWhenNoneOrAllResolved() {
+    #expect(EventPrompt.renderOpenEvents([]).isEmpty)
+    let allResolved = [
+        MeetingEvent(kind: .question, text: "X", resolved: true),
+        MeetingEvent(kind: .action, text: "Y", resolved: true),
+    ]
+    #expect(EventPrompt.renderOpenEvents(allResolved).isEmpty)
+}
+
+@Test func renderOpenEventsListsOnlyUnresolvedWithMeta() {
+    let events = [
+        MeetingEvent(kind: .question, text: "競合分析の期限"),
+        MeetingEvent(kind: .action, text: "提案書をまとめる", owner: "田中", dueDate: "金曜"),
+        MeetingEvent(kind: .topic, text: "オンボーディング方針", resolved: true),
+    ]
+    let rendered = EventPrompt.renderOpenEvents(events)
+    #expect(rendered.contains("[question] 競合分析の期限"))
+    #expect(rendered.contains("[action] 提案書をまとめる (owner: 田中, due: 金曜)"))
+    // Resolved entries are filtered out — they're not the LLM's concern.
+    #expect(!rendered.contains("オンボーディング方針"))
+}
+
+@Test func extractPromptOmitsOpenItemsBlockWhenEmpty() {
+    let messages = EventPrompt.extract(transcript: "[A] hello", openEvents: [])
+    let userPrompt = messages.last?.content ?? ""
+    // Bare transcript, no "OPEN items" header.
+    #expect(userPrompt == "[A] hello")
+}
+
+@Test func extractPromptIncludesOpenItemsBlockWhenPresent() {
+    let open = [MeetingEvent(kind: .question, text: "競合分析の期限")]
+    let messages = EventPrompt.extract(transcript: "[A] 金曜まで", openEvents: open)
+    let userPrompt = messages.last?.content ?? ""
+    #expect(userPrompt.contains("## OPEN items"))
+    #expect(userPrompt.contains("[question] 競合分析の期限"))
+    #expect(userPrompt.contains("## New transcript fragment"))
+    #expect(userPrompt.contains("[A] 金曜まで"))
+}
+
+@Test func resolutionFlowsThroughMergerWhenLLMReEmitsResolved() throws {
+    // Simulate the round trip: turn N extracts an open question; turn N+1
+    // sees an answer and the LLM re-emits the same question with
+    // resolved=true + resolution. The merger should fold the resolution
+    // into the existing entry (same id, resolved upgraded).
+    let originalID = UUID()
+    var list = [
+        MeetingEvent(
+            id: originalID,
+            kind: .question,
+            text: "競合分析の期限"
+        )
+    ]
+    let resolvedEcho = try EventExtractor.parse(response: #"""
+    {"events":[{"kind":"question","text":"競合分析の期限","resolved":true,"resolution":"金曜まで"}]}
+    """#)
+    EventMerger().merge(resolvedEcho, into: &list)
+    #expect(list.count == 1)
+    #expect(list[0].id == originalID)
+    #expect(list[0].resolved == true)
+    #expect(list[0].resolution == "金曜まで")
+}

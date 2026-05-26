@@ -306,7 +306,14 @@ final class AppModel: ObservableObject {
             // むしろ進捗を 1 ステップずつ正確に出せる方が UX が良い。
             let updatedSummary = try await summaryEngine.ingest(newSegments: segments)
             summaryProgress = .extractingEvents(segmentCount: segments.count)
-            let newEvents = try await eventExtractor.extract(from: segments)
+            // Pass the current still-open events so the LLM can mark them
+            // resolved when the new fragment contains an answer / outcome.
+            // Without this, a question extracted in turn N can never be
+            // closed by an answer that arrives in turn N+1.
+            let newEvents = try await eventExtractor.extract(
+                from: segments,
+                openEvents: events
+            )
             summary = updatedSummary
             let beforeCount = events.count
             eventMerger.merge(newEvents, into: &events)
