@@ -1,0 +1,189 @@
+/* === Recording controls === */
+"recording.start" = "Record";
+"recording.stop" = "Stop";
+"recording.in_progress" = "Recording";
+"recording.in_progress_screen" = "Live recording";
+"recording.regenerate_summary" = "Re-summarize";
+"recording.regenerate_summary.help" = "Send the entire transcript back through the LLM to regenerate summary and events";
+"recording.save_destination" = "Save to:";
+"recording.template" = "Template";
+
+/* === Sidebar === */
+"sidebar.unfiled" = "Unfiled";
+"sidebar.no_recordings" = "(none)";
+"sidebar.project_no_recordings" = "(no recordings)";
+"sidebar.add_project" = "Add project";
+"sidebar.reload" = "Reload";
+"sidebar.no_selection_for_delete" = "No session selected to delete";
+"sidebar.delete_selected_count" = "Delete %d selected session(s)";
+
+/* === Project context menu === */
+"project.set_active" = "Set as recording destination";
+"project.set_active_help" = "New recordings will be filed under this project";
+"project.edit" = "Edit...";
+"project.delete" = "Delete";
+"project.move_to" = "Move to project";
+"project.unfiled" = "(Unfiled)";
+"project.untitled_name" = "New Project";
+
+/* === Sheets === */
+"sheet.new_project_title" = "New Project";
+"sheet.project_edit_title" = "Edit Project";
+"sheet.project_name_label" = "Name";
+"sheet.project_name_placeholder" = "Project name";
+"sheet.cancel" = "Cancel";
+"sheet.create" = "Create";
+"sheet.save" = "Save";
+"sheet.confirm_delete_title" = "Delete %d session(s)?";
+"sheet.confirm_delete_message" = "This action cannot be undone.";
+
+/* === Detail panes === */
+"pane.transcript.placeholder" = "Transcript will appear here";
+"pane.summary.placeholder" = "Summary will appear here as the meeting progresses";
+"pane.events.placeholder" = "Questions, decisions, and actions will appear here";
+
+/* === Session detail === */
+"session.title_fallback" = "Session";
+"session.stats_format" = "%d segment(s) · %d event(s)";
+"session.duration_format" = "%@ · duration %dm %ds";
+"session.style_sheet_title" = "Template override for session \"%@\"";
+
+/* === Settings tabs === */
+"settings.tab.general" = "General";
+"settings.tab.llm" = "LLM";
+"settings.tab.templates" = "Templates";
+"settings.tab.audio" = "Audio";
+"settings.tab.advanced" = "Advanced";
+
+/* === Settings: General === */
+"settings.transcription_model" = "Transcription model";
+"settings.language" = "Language";
+"settings.takes_effect_caption" = "Changes take effect on the next Start.";
+
+/* === Settings: LLM === */
+"settings.backend" = "Backend";
+"settings.model" = "Model";
+"settings.loading" = "Loading...";
+"settings.no_models" = "(no models)";
+"settings.refresh_models_help" = "Reload model list";
+"settings.ollama_url" = "Ollama URL";
+"settings.ollama_caption" = "Ollama must be running and the model must already be pulled.";
+"settings.mlx_caption" = "Downloaded automatically from HuggingFace on first use (several GB, network required).";
+
+/* === Settings: Audio === */
+"settings.capture_system" = "Capture system audio";
+"settings.capture_mic" = "Capture microphone";
+"settings.voice_processing" = "Echo cancellation (AEC + noise suppression + AGC)";
+"settings.diarization" = "Speaker diarization (experimental, Pyannote)";
+"settings.input_device" = "Input device";
+"settings.input_default" = "System default";
+"settings.reload" = "Reload";
+"settings.system_audio_caption" = "System audio is captured via ScreenCaptureKit. macOS will prompt you for Screen Recording permission on first use (no video is actually recorded).";
+"settings.voice_processing_caption" = "Echo cancellation (Apple VoiceProcessingIO) suppresses double-transcription when meeting audio plays from speakers and bleeds back into the mic. Side effect: the speaker output is ducked. Off by default; headphones are recommended.";
+"settings.diarization_caption" = "Speaker diarization uses SpeakerKit (Pyannote, CoreML) to attach a speaker label to each transcript segment. Downloads ~30 MB on first use. CPU/GPU usage rises noticeably for long meetings. Labels are stabilized across rolling windows by time overlap, but extended silence may cause a speaker to be re-assigned.";
+
+/* === Settings: Templates === */
+"settings.template_caption" = "These settings become the default for every project. Each project and each individual session may override them.";
+
+/* === Settings: Advanced === */
+"settings.summary_interval_format" = "Summary update interval: %d s";
+"settings.summary_interval_caption" = "Too short and Ollama / MLX inference cannot keep up. 30–60 s recommended.";
+
+/* === Style editor === */
+"style.user_label" = "User (global default)";
+"style.project_label" = "Project";
+"style.session_label" = "Session";
+"style.scope_header_format" = "%@ instructions";
+"style.summary_extra_label" = "Additional summary instructions";
+"style.summary_extra_example" = "e.g. \"emphasize decisions\", \"append a glossary of jargon\"";
+"style.event_extra_label" = "Additional event-extraction instructions";
+"style.event_extra_example" = "e.g. \"ignore actions without a clear due date\", \"omit questions\"";
+"style.bullet_words_label" = "Max words per bullet";
+"style.section_cap_label" = "Section cap";
+"style.inherit_zero" = "Inherit";
+"style.unlimited_zero" = "Unlimited";
+"style.inherit_caption" = "Leave blank / 0 to inherit from the next less-specific scope.";
+"style.project_caption" = "Applied to every session recorded into this project. Blank fields inherit from User settings.";
+"style.session_caption" = "Applied only when re-summarizing this session. Blank fields inherit from Project settings.";
+
+/* === Status messages === */
+"status.idle" = "Idle";
+"status.starting" = "Starting...";
+"status.starting_audio" = "Starting audio capture...";
+"status.loading_model" = "Loading model... (first run may take a while)";
+"status.recording" = "Recording...";
+"status.saving" = "Saving...";
+"status.saved_format" = "Saved %@";
+"status.capture_error_format" = "Capture error: %@";
+"status.summary_error_format" = "Summary error: %@";
+"status.requires_macos" = "macOS 14.4 or later is required";
+
+/* === Errors === */
+"error.session_not_found" = "Session not found";
+"error.session_load_failed" = "Unable to load session";
+"error.session_select_prompt" = "Select a session";
+"error.multi_selected_count" = "%d session(s) selected";
+"error.multi_selected_hint" = "Use the trash button in the sidebar to delete in bulk. Hold Cmd/Shift+Click to adjust the selection.";
+
+/* === Progress === */
+"progress.model_downloading_format" = "Downloading model %@… %d%%";
+"progress.model_loading_format" = "Loading model %@";
+"progress.summarizing_format" = "Summarizing (%d segments)";
+"progress.extracting_events_format" = "Extracting events (%d segments)";
+"progress.generating_title" = "Generating title…";
+"progress.done_format" = "Done %@ (sections=%d, events=%d)";
+"progress.failed_format" = "Error: %@";
+
+/* === Whisper model names === */
+"whisper.tiny" = "tiny (~75 MB, fastest, low accuracy)";
+"whisper.base" = "base (~145 MB)";
+"whisper.small" = "small (~470 MB)";
+"whisper.medium" = "medium (~1.5 GB, mid accuracy)";
+"whisper.large_v3" = "large-v3 (~3 GB, high accuracy)";
+"whisper.large_v3_turbo" = "large-v3-turbo (~626 MB, recommended multilingual)";
+"whisper.large_v3_full" = "large-v3-turbo-949MB (~949 MB, more accurate multilingual)";
+
+/* === Whisper languages === */
+"whisper.language.ja" = "Japanese";
+"whisper.language.en" = "English";
+"whisper.language.auto" = "Auto-detect";
+
+/* === LLM backend display names === */
+"llm.backend.mlx" = "MLX (on-device, no dependencies)";
+"llm.backend.ollama" = "Ollama (external server)";
+
+/* === Meeting title default === */
+"meeting.default_title" = "Meeting";
+
+/* === Model tags (shown next to picker entries) === */
+"model.tag.lightweight" = "Lightweight";
+"model.tag.default" = "Recommended";
+"model.tag.multilingual" = "Multilingual";
+"model.tag.high_accuracy" = "High accuracy";
+"model.tag.large_memory" = "Large (32GB+)";
+
+/* === Onboarding === */
+"onboarding.welcome.title" = "Welcome to LocalGijiroku";
+"onboarding.welcome.subtitle" = "A privacy-first meeting note-taker powered by local LLMs";
+"onboarding.welcome.detail" = "Everything you say and everything the model produces stays on this Mac. Nothing leaves the device.";
+"onboarding.permissions.title" = "Permissions needed";
+"onboarding.permissions.mic" = "Microphone: used to transcribe what you say.";
+"onboarding.permissions.screen" = "Screen Recording: required to capture audio from other apps (e.g. the other side of Zoom or Meet calls). No video is ever recorded.";
+"onboarding.permissions.detail" = "macOS will ask you to grant these permissions the first time you hit Record — please choose Allow.";
+"onboarding.llm.title" = "LLM backend";
+"onboarding.llm.detail" = "Pick which local LLM produces summaries and action items. You can change this later.";
+"onboarding.llm.mlx_recommend" = "MLX is recommended: runs entirely inside the app with no external dependency. The model (~2–5 GB) downloads automatically on first use.";
+"onboarding.audio.title" = "Audio settings";
+"onboarding.audio.detail" = "Choose how the app captures audio. You can change these later in Settings.";
+"onboarding.audio.recommend" = "Recommended: use headphones, enable both system audio and microphone capture, leave AEC off, and turn on speaker diarization if you want per-speaker labels.";
+"onboarding.usage.title" = "How to use it";
+"onboarding.usage.step_record" = "Hit Record at the top of the sidebar to start a meeting.";
+"onboarding.usage.step_project" = "Use the 📁+ button (top-right) to create projects so your meetings stay organized.";
+"onboarding.usage.step_view" = "While recording you'll see live transcript, rolling summary, and extracted action items in real time.";
+"onboarding.usage.step_finish" = "When you stop, the app generates a title and saves the meeting as a note.";
+"onboarding.next" = "Next";
+"onboarding.back" = "Back";
+"onboarding.finish" = "Get started";
+"onboarding.skip" = "Skip";
+"onboarding.show_again" = "Don't show this again";
+"onboarding.menu" = "Show tutorial";

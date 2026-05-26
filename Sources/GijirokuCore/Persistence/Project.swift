@@ -5,12 +5,22 @@ public struct Project: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var name: String
     public var createdAt: Date
     public var note: String?
+    /// Project-wide override for the LLM summary style. Applied on top of the
+    /// user-level default and below any session-level override.
+    public var summaryStyle: SummaryStyle?
 
-    public init(id: UUID = UUID(), name: String, createdAt: Date = .now, note: String? = nil) {
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        createdAt: Date = .now,
+        note: String? = nil,
+        summaryStyle: SummaryStyle? = nil
+    ) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.note = note
+        self.summaryStyle = summaryStyle
     }
 }
 

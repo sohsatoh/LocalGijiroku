@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds GijirokuTaker through xcodebuild (so that MLX's Metal shaders compile
+# Builds LocalGijiroku through xcodebuild (so that MLX's Metal shaders compile
 # into default.metallib) and wraps the binary plus SPM resource bundles into a
 # .app that macOS can launch from Finder.
 #
@@ -19,8 +19,9 @@ else
 fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="GijirokuTaker"
-BUNDLE_ID="com.gijirokutaker.app"
+SCHEME="GijirokuTaker"
+APP_NAME="LocalGijiroku"
+BUNDLE_ID="dev.satoh.LocalGijiroku"
 DERIVED="${ROOT}/xcode-build"
 PRODUCTS_DIR="${DERIVED}/Build/Products/${XCODE_CONFIG}"
 APP_PATH="${ROOT}/build/${APP_NAME}.app"
@@ -29,7 +30,7 @@ CONTENTS="${APP_PATH}/Contents"
 echo "==> Building ${APP_NAME} (${XCODE_CONFIG}) via xcodebuild"
 cd "${ROOT}"
 xcodebuild \
-    -scheme "${APP_NAME}" \
+    -scheme "${SCHEME}" \
     -configuration "${XCODE_CONFIG}" \
     -derivedDataPath "${DERIVED}" \
     -destination 'platform=macOS' \
@@ -40,7 +41,7 @@ xcodebuild \
         exit 1
     }
 
-BIN="${PRODUCTS_DIR}/${APP_NAME}"
+BIN="${PRODUCTS_DIR}/${SCHEME}"
 if [ ! -f "${BIN}" ]; then
     echo "ERROR: binary not found at ${BIN}" >&2
     exit 1

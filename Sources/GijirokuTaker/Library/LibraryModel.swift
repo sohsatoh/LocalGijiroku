@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import GijirokuCore
+import GijirokuLLM
 
 /// Selection state for the sidebar: either the live recording session or a
 /// past saved session.
@@ -15,9 +16,16 @@ final class LibraryModel: ObservableObject {
 
     @Published var projects: [Project] = []
     @Published var allSessions: [SessionSummaryRow] = []
-    @Published var selection: LibrarySelection = .live
+    /// Multi-selection. When exactly one item is selected the detail view
+    /// shows it; with multiple session selections the detail shows a
+    /// bulk-action view. `.live` is always exactly one item by itself.
+    @Published var selection: Set<LibrarySelection> = [.live]
     /// When non-nil, new recordings are filed under this project.
     @Published var activeProjectID: UUID?
+    /// Currently in-flight regeneration. Used by the UI to disable the
+    /// regenerate button and render a progress indicator.
+    @Published var regeneratingSessionID: UUID?
+    @Published var regenerationProgress: SummaryProgress = .idle
 
     let projectStore: FileProjectStore
     let sessionStore: FileSessionStore
@@ -41,13 +49,26 @@ final class LibraryModel: ObservableObject {
         allSessions.filter { $0.projectId == projectID }
     }
 
+    /// The single focused selection (used to drive the detail pane).
+    var singleSelection: LibrarySelection? {
+        selection.count == 1 ? selection.first : nil
+    }
+
+    /// All session IDs currently selected (excluding the live sentinel).
+    var selectedSessionIDs: Set<UUID> {
+        Set(selection.compactMap { sel -> UUID? in
+            if case .session(let id) = sel { return id }
+            return nil
+        })
+    }
+
     func loadSession(id: UUID) -> Session? {
         try? sessionStore.load(id: id)
     }
 
     func createProject(name: String) -> Project {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let project = Project(name: trimmed.isEmpty ? "新規プロジェクト" : trimmed)
+        let project = Project(name: trimmed.isEmpty ? L10n.string("project.untitled_name") : trimmed)
         try? projectStore.save(project)
         reload()
         return project
@@ -57,6 +78,16 @@ final class LibraryModel: ObservableObject {
         var p = project
         p.name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         try? projectStore.save(p)
+        reload()
+    }
+
+    func updateProject(_ project: Project) {
+        try? projectStore.save(project)
+        reload()
+    }
+
+    func updateSession(_ session: Session) {
+        try? sessionStore.save(session)
         reload()
     }
 
@@ -75,10 +106,21 @@ final class LibraryModel: ObservableObject {
     }
 
     func deleteSession(_ row: SessionSummaryRow) {
-        try? sessionStore.delete(id: row.id)
-        if case .session(let id) = selection, id == row.id {
-            selection = .live
+        deleteSessions([row.id])
+    }
+
+    /// Deletes a set of sessions and prunes them from the current selection.
+    /// If the selection ends up empty, falls back to `.live` so the detail
+    /// pane always has something to show.
+    func deleteSessions(_ ids: Set<UUID>) {
+        for id in ids {
+            try? sessionStore.delete(id: id)
         }
+        let filtered = selection.filter { sel in
+            if case .session(let sid) = sel { return !ids.contains(sid) }
+            return true
+        }
+        selection = filtered.isEmpty ? [.live] : filtered
         reload()
     }
 
@@ -87,5 +129,79 @@ final class LibraryModel: ObservableObject {
         session.projectId = projectID
         try? sessionStore.save(session)
         reload()
+    }
+
+    /// Re-runs summary + event extraction over the transcript of an existing
+    /// session and writes the result back to disk. Progress is published on
+    /// `regenerationProgress`; the UI should observe it for a status line.
+    func regenerateSummary(for sessionID: UUID) async {
+        guard regeneratingSessionID == nil else { return }
+        guard var session = loadSession(id: sessionID) else { return }
+        guard !session.transcript.isEmpty else {
+            regenerationProgress = .failed(message: "Transcript is empty")
+            return
+        }
+
+        regeneratingSessionID = sessionID
+        defer { regeneratingSessionID = nil }
+
+        let settings = SettingsModel.shared
+        let language: String = {
+            switch settings.whisperLanguage {
+            case "ja": return "Japanese"
+            case "en": return "English"
+            default: return "auto"
+            }
+        }()
+
+        let llm: any LLMClient
+        switch settings.llmBackend {
+        case .ollama:
+            let url = URL(string: settings.ollamaBaseURL) ?? URL(string: "http://127.0.0.1:11434")!
+            llm = OllamaClient(baseURL: url)
+        case .mlx:
+            llm = MLXClient { [weak self] progress in
+                guard progress.fraction < 0.99 else { return }
+                Task { @MainActor in
+                    self?.regenerationProgress = .modelDownloading(
+                        modelID: progress.modelID,
+                        fraction: progress.fraction
+                    )
+                }
+            }
+        }
+
+        let model = settings.activeLLMModelID
+        // Resolve summary style from user / project / session layers.
+        let project = session.projectId.flatMap { id in
+            projects.first(where: { $0.id == id })
+        }
+        let resolvedStyle = SummaryStyle.resolved(
+            user: settings.userSummaryStyle,
+            project: project?.summaryStyle,
+            session: session.summaryStyle
+        )
+        let summaryEngine = SummaryEngine(client: llm, config: .init(model: model, language: language, style: resolvedStyle))
+        let eventExtractor = EventExtractor(client: llm, config: .init(model: model, style: resolvedStyle))
+
+        regenerationProgress = .summarizing(segmentCount: session.transcript.count)
+        do {
+            let newSummary = try await summaryEngine.ingest(newSegments: session.transcript)
+            regenerationProgress = .extractingEvents(segmentCount: session.transcript.count)
+            let newEvents = try await eventExtractor.extract(from: session.transcript)
+            var merged: [MeetingEvent] = []
+            EventMerger().merge(newEvents, into: &merged)
+            session.summary = newSummary
+            session.events = merged
+            try sessionStore.save(session)
+            reload()
+            regenerationProgress = .done(
+                at: .now,
+                sections: newSummary.sections.count,
+                events: merged.count
+            )
+        } catch {
+            regenerationProgress = .failed(message: error.localizedDescription)
+        }
     }
 }

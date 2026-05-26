@@ -39,10 +39,25 @@ final class MicrophoneCapture {
         // Enable AEC + noise suppression + AGC. Must be called *before*
         // reading inputFormat / installTap, because flipping it changes the
         // node's IO unit (and therefore the format) under the hood.
+        //
+        // VoiceProcessingIO defaults to ducking other audio (so the user's
+        // own speech is more intelligible to the far side of a call). That's
+        // not what we want here — we're a passive recorder, and the user just
+        // sees the meeting speaker getting quieter when they hit Start.
+        // macOS 14+ lets us dial the ducking down to the minimum.
         if enableVoiceProcessing {
             do {
                 try node.setVoiceProcessingEnabled(true)
-                logger.info("Voice processing (AEC + NS + AGC) enabled")
+                if #available(macOS 14.0, *) {
+                    let config = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                        enableAdvancedDucking: false,
+                        duckingLevel: .min
+                    )
+                    node.voiceProcessingOtherAudioDuckingConfiguration = config
+                    logger.info("Voice processing (AEC + NS + AGC) enabled, ducking=min")
+                } else {
+                    logger.info("Voice processing (AEC + NS + AGC) enabled (legacy ducking)")
+                }
             } catch {
                 logger.error("Failed to enable voice processing: \(error.localizedDescription, privacy: .public)")
             }

@@ -9,6 +9,9 @@ public struct Session: Codable, Sendable, Identifiable {
     public var transcript: [TranscriptSegment]
     public var summary: CumulativeSummary
     public var events: [MeetingEvent]
+    /// Per-session override for the LLM summary style. Highest priority in the
+    /// resolution chain.
+    public var summaryStyle: SummaryStyle?
 
     public init(
         id: UUID = UUID(),
@@ -18,7 +21,8 @@ public struct Session: Codable, Sendable, Identifiable {
         endedAt: Date? = nil,
         transcript: [TranscriptSegment] = [],
         summary: CumulativeSummary = CumulativeSummary(),
-        events: [MeetingEvent] = []
+        events: [MeetingEvent] = [],
+        summaryStyle: SummaryStyle? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -28,5 +32,6 @@ public struct Session: Codable, Sendable, Identifiable {
         self.transcript = transcript
         self.summary = summary
         self.events = events
+        self.summaryStyle = summaryStyle
     }
 }

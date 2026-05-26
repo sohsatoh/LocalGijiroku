@@ -34,7 +34,11 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
 public actor EventExtractor {
     public struct Config: Sendable {
         public let model: String
-        public init(model: String = "qwen2.5:7b") { self.model = model }
+        public let style: SummaryStyle
+        public init(model: String = "qwen2.5:7b", style: SummaryStyle = .builtin) {
+            self.model = model
+            self.style = style
+        }
     }
 
     private let client: LLMClient
@@ -50,7 +54,7 @@ public actor EventExtractor {
         let transcript = segments
             .map { "[\($0.source.rawValue)] \($0.text)" }
             .joined(separator: "\n")
-        let messages = EventPrompt.extract(transcript: transcript)
+        let messages = EventPrompt.extract(transcript: transcript, style: config.style)
         let response = try await client.chat(model: config.model, messages: messages, format: .json)
         return try Self.parse(response: response)
     }
@@ -80,7 +84,10 @@ public actor EventExtractor {
 }
 
 enum EventPrompt {
-    static func extract(transcript: String) -> [LLMMessage] {
+    static func extract(transcript: String, style: SummaryStyle = .builtin) -> [LLMMessage] {
+        let extra = style.extraEventInstructions.isEmpty
+            ? ""
+            : "\n\nAdditional user instructions:\n\(style.extraEventInstructions)"
         let system = """
         You scan meeting transcript fragments and extract structured events.
         Output JSON only, no prose, no markdown fences:
@@ -91,7 +98,7 @@ enum EventPrompt {
         - kind=action: a concrete task. Include owner if mentioned, due if mentioned.
         - Only include events explicitly stated. Do not speculate.
         - Use the same language as the transcript.
-        - If nothing qualifies, return {"events":[]}.
+        - If nothing qualifies, return {"events":[]}.\(extra)
         """
         return [
             .init(role: .system, content: system),

@@ -8,18 +8,52 @@ struct RootView: View {
     var body: some View {
         NavigationSplitView {
             LibrarySidebar(library: library)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 360)
         } detail: {
-            switch library.selection {
-            case .live:
-                RecordingView()
-            case .session(let id):
-                if let session = library.loadSession(id: id) {
-                    SessionDetailView(session: session)
+            Group {
+                if library.selection.count > 1 {
+                    multiSelectionView
+                } else if let single = library.singleSelection {
+                    detailForSingle(single)
                 } else {
-                    ContentUnavailableView("セッションが見つかりません", systemImage: "exclamationmark.triangle")
+                    ContentUnavailableView(L10n.string("error.session_select_prompt"), systemImage: "sidebar.left")
                 }
             }
+            .frame(minWidth: 960)
         }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    @ViewBuilder
+    private func detailForSingle(_ selection: LibrarySelection) -> some View {
+        switch selection {
+        case .live:
+            RecordingView().id("live")
+        case .session(let id):
+            if let session = library.loadSession(id: id) {
+                SessionDetailView(session: session).id(id)
+            } else {
+                ContentUnavailableView(L10n.string("error.session_not_found"), systemImage: "exclamationmark.triangle")
+                    .id(id)
+            }
+        }
+    }
+
+    private var multiSelectionView: some View {
+        let ids = library.selectedSessionIDs
+        return VStack(spacing: 12) {
+            Image(systemName: "checklist")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text(L10n.format("error.multi_selected_count", ids.count))
+                .font(.title3)
+            Text(loc: "error.multi_selected_hint")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -35,42 +69,43 @@ struct RecordingView: View {
             Divider()
             HSplitView {
                 TranscriptPane(segments: model.transcript)
-                    .frame(minWidth: 320)
+                    .frame(minWidth: 280, idealWidth: 360)
                 SummaryPane(summary: model.summary)
-                    .frame(minWidth: 320)
+                    .frame(minWidth: 280, idealWidth: 360)
                 EventPane(events: model.events)
-                    .frame(minWidth: 280)
+                    .frame(minWidth: 240, idealWidth: 280)
             }
         }
-        .navigationTitle("録音中")
+        .navigationTitle(L10n.string("recording.in_progress"))
     }
 
     private var toolbar: some View {
         HStack(spacing: 12) {
-            Button(model.isRecording ? "Stop" : "Start") {
-                if model.isRecording {
-                    model.stopRecording()
-                } else {
-                    model.startRecording()
-                }
+            Button {
+                model.regenerateSummary()
+            } label: {
+                Label(loc: "recording.regenerate_summary", systemImage: "arrow.clockwise")
             }
-            .keyboardShortcut("r", modifiers: [.command])
+            .disabled(model.transcript.isEmpty || model.summaryProgress.isBusy)
+            .help(L10n.string("recording.regenerate_summary.help"))
 
             Text(model.statusMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            ProgressBadge(progress: model.summaryProgress)
+
             Spacer()
 
             HStack(spacing: 6) {
-                Text("保存先:")
+                Text(loc: "recording.save_destination")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker("保存先", selection: Binding(
+                Picker(L10n.string("recording.save_destination"), selection: Binding(
                     get: { library.activeProjectID },
                     set: { library.activeProjectID = $0 }
                 )) {
-                    Text("（未分類）").tag(UUID?.none)
+                    Text(loc: "project.unfiled").tag(UUID?.none)
                     ForEach(library.projects) { project in
                         Text(project.name).tag(UUID?.some(project.id))
                     }
@@ -98,6 +133,9 @@ struct TranscriptPane: View {
                     ForEach(segments) { seg in
                         HStack(alignment: .top, spacing: 6) {
                             Text(icon(for: seg.source))
+                            if let speaker = seg.speaker {
+                                SpeakerBadge(label: speaker)
+                            }
                             Text(seg.text)
                                 .textSelection(.enabled)
                                 .opacity(seg.isFinal ? 1.0 : 0.85)

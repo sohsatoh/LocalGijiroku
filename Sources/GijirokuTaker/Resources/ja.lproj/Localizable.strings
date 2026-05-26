@@ -1,0 +1,189 @@
+/* === Recording controls === */
+"recording.start" = "録音開始";
+"recording.stop" = "停止";
+"recording.in_progress" = "録音中";
+"recording.in_progress_screen" = "ライブ録音";
+"recording.regenerate_summary" = "再サマリ";
+"recording.regenerate_summary.help" = "これまでの transcript 全体を LLM に投げ直してサマリ/イベントを再生成";
+"recording.save_destination" = "保存先:";
+"recording.template" = "テンプレ";
+
+/* === Sidebar === */
+"sidebar.unfiled" = "未分類";
+"sidebar.no_recordings" = "（なし）";
+"sidebar.project_no_recordings" = "（録音なし）";
+"sidebar.add_project" = "プロジェクトを追加";
+"sidebar.reload" = "再読み込み";
+"sidebar.no_selection_for_delete" = "削除対象のセッションが選択されていません";
+"sidebar.delete_selected_count" = "選択中 %d 件のセッションを削除";
+
+/* === Project context menu === */
+"project.set_active" = "ここに録音先を設定";
+"project.set_active_help" = "新しい録音はこのプロジェクトに保存されます";
+"project.edit" = "編集...";
+"project.delete" = "削除";
+"project.move_to" = "プロジェクトに移動";
+"project.unfiled" = "（未分類）";
+"project.untitled_name" = "新規プロジェクト";
+
+/* === Sheets === */
+"sheet.new_project_title" = "新規プロジェクト";
+"sheet.project_edit_title" = "プロジェクトを編集";
+"sheet.project_name_label" = "名前";
+"sheet.project_name_placeholder" = "プロジェクト名";
+"sheet.cancel" = "キャンセル";
+"sheet.create" = "作成";
+"sheet.save" = "保存";
+"sheet.confirm_delete_title" = "%d 件のセッションを削除しますか？";
+"sheet.confirm_delete_message" = "この操作は取り消せません。";
+
+/* === Detail panes === */
+"pane.transcript.placeholder" = "ここに字幕が表示されます";
+"pane.summary.placeholder" = "会議が進行するとサマリがここに表示されます";
+"pane.events.placeholder" = "質問・決定事項・アクションがここに表示されます";
+
+/* === Session detail === */
+"session.title_fallback" = "セッション";
+"session.stats_format" = "%d セグメント · %d イベント";
+"session.duration_format" = "%@ · 録音時間 %d 分 %d 秒";
+"session.style_sheet_title" = "セッション「%@」のテンプレート上書き";
+
+/* === Settings tabs === */
+"settings.tab.general" = "一般";
+"settings.tab.llm" = "LLM";
+"settings.tab.templates" = "テンプレート";
+"settings.tab.audio" = "オーディオ";
+"settings.tab.advanced" = "詳細";
+
+/* === Settings: General === */
+"settings.transcription_model" = "文字起こしモデル";
+"settings.language" = "言語";
+"settings.takes_effect_caption" = "変更は次回の Start から有効になります。";
+
+/* === Settings: LLM === */
+"settings.backend" = "バックエンド";
+"settings.model" = "モデル";
+"settings.loading" = "読み込み中...";
+"settings.no_models" = "(該当モデルなし)";
+"settings.refresh_models_help" = "モデル一覧を再読み込み";
+"settings.ollama_url" = "Ollama URL";
+"settings.ollama_caption" = "Ollama サーバーが起動していて、モデルが pull 済みである必要があります。";
+"settings.mlx_caption" = "初回選択時に HuggingFace から自動ダウンロードされます（数 GB、ネット接続必須）。";
+
+/* === Settings: Audio === */
+"settings.capture_system" = "システム音声をキャプチャ";
+"settings.capture_mic" = "マイクをキャプチャ";
+"settings.voice_processing" = "エコーキャンセル (AEC + ノイズ抑制 + AGC)";
+"settings.diarization" = "話者分離 (実験的、Pyannote)";
+"settings.input_device" = "入力デバイス";
+"settings.input_default" = "システムのデフォルト";
+"settings.reload" = "再読込";
+"settings.system_audio_caption" = "システム音声は ScreenCaptureKit 経由でキャプチャします。初回利用時に macOS が「画面録画」権限のプロンプトを出すので許可してください（映像は録画しません）。";
+"settings.voice_processing_caption" = "エコーキャンセル (Apple VoiceProcessingIO) は、スピーカー出力でビデオ会議をする場合に相手の声が二重 transcript されるのを抑える機能。ただし副作用としてスピーカー出力が小さくなる ducking が起きるため、デフォルトは OFF。ヘッドホン運用が推奨です。スピーカー会議で二重 transcript が気になる時だけ ON にしてください。";
+"settings.diarization_caption" = "話者分離は SpeakerKit (Pyannote, CoreML) で各 transcript セグメントに speaker ラベルを付与します。初回 ON 時に segmentation + embedding モデル (~30MB) を DL。CPU/GPU 負荷が増えるので録音が長いと遅延しがち。ローリング窓の時間重複でラベルを安定化していますが、長い沈黙を挟むと再アサインされる可能性があります。";
+
+/* === Settings: Templates === */
+"settings.template_caption" = "ここで設定した内容が全プロジェクトの初期値になります。各プロジェクトおよび個別セッションで上書きできます。";
+
+/* === Settings: Advanced === */
+"settings.summary_interval_format" = "サマリ更新間隔: %d 秒";
+"settings.summary_interval_caption" = "短すぎると Ollama / MLX 推論が間に合わず重くなります。30〜60 秒推奨。";
+
+/* === Style editor === */
+"style.user_label" = "ユーザー (全体デフォルト)";
+"style.project_label" = "プロジェクト";
+"style.session_label" = "セッション";
+"style.scope_header_format" = "%@ の指示";
+"style.summary_extra_label" = "サマリ生成への追加指示";
+"style.summary_extra_example" = "例: 「決定事項を強調する」「専門用語の glossary を末尾に付ける」";
+"style.event_extra_label" = "イベント抽出への追加指示";
+"style.event_extra_example" = "例: 「期限が曖昧な action は無視する」「question は除外する」";
+"style.bullet_words_label" = "Bullet 最大語数";
+"style.section_cap_label" = "セクション上限";
+"style.inherit_zero" = "継承";
+"style.unlimited_zero" = "無制限";
+"style.inherit_caption" = "空欄 / 0 を残すと一つ上のスコープの設定を引き継ぎます。";
+"style.project_caption" = "このプロジェクトに録音する全セッションへ適用されます。空欄ならユーザー設定を継承。";
+"style.session_caption" = "このセッションを再サマリする際にのみ適用されます。空欄ならプロジェクト設定を継承。";
+
+/* === Status messages (live recording toolbar) === */
+"status.idle" = "Idle";
+"status.starting" = "起動中...";
+"status.starting_audio" = "オーディオキャプチャ起動中...";
+"status.loading_model" = "モデル読み込み中... (初回は時間がかかります)";
+"status.recording" = "録音中...";
+"status.saving" = "保存中...";
+"status.saved_format" = "保存完了 %@";
+"status.capture_error_format" = "キャプチャエラー: %@";
+"status.summary_error_format" = "サマリエラー: %@";
+"status.requires_macos" = "macOS 14.4 以降が必要です";
+
+/* === Errors === */
+"error.session_not_found" = "セッションが見つかりません";
+"error.session_load_failed" = "セッションを読み込めません";
+"error.session_select_prompt" = "セッションを選択してください";
+"error.multi_selected_count" = "%d 件のセッションを選択中";
+"error.multi_selected_hint" = "サイドバーのゴミ箱ボタンで一括削除できます。Cmd/Shift+クリックで選択を調整。";
+
+/* === Progress === */
+"progress.model_downloading_format" = "モデルDL中 %@… %d%%";
+"progress.model_loading_format" = "モデル読み込み中 %@";
+"progress.summarizing_format" = "サマリ生成中 (%d セグメント)";
+"progress.extracting_events_format" = "イベント抽出中 (%d セグメント)";
+"progress.generating_title" = "タイトル生成中…";
+"progress.done_format" = "完了 %@ (sections=%d events=%d)";
+"progress.failed_format" = "エラー: %@";
+
+/* === Whisper model names === */
+"whisper.tiny" = "tiny (~75 MB、最速、精度低)";
+"whisper.base" = "base (~145 MB)";
+"whisper.small" = "small (~470 MB)";
+"whisper.medium" = "medium (~1.5 GB、精度中)";
+"whisper.large_v3" = "large-v3 (~3 GB、精度高)";
+"whisper.large_v3_turbo" = "large-v3-turbo (~626 MB、多言語推奨)";
+"whisper.large_v3_full" = "large-v3-turbo-949MB (~949 MB、より高精度な多言語)";
+
+/* === Whisper languages === */
+"whisper.language.ja" = "日本語";
+"whisper.language.en" = "English";
+"whisper.language.auto" = "自動判定";
+
+/* === LLM backend display names === */
+"llm.backend.mlx" = "MLX (オンデバイス・依存なし)";
+"llm.backend.ollama" = "Ollama (外部サーバー)";
+
+/* === Meeting title default === */
+"meeting.default_title" = "ミーティング";
+
+/* === Model tags (shown next to picker entries) === */
+"model.tag.lightweight" = "軽量";
+"model.tag.default" = "推奨";
+"model.tag.multilingual" = "多言語";
+"model.tag.high_accuracy" = "高精度";
+"model.tag.large_memory" = "大型 (32GB+)";
+
+/* === Onboarding === */
+"onboarding.welcome.title" = "LocalGijiroku へようこそ";
+"onboarding.welcome.subtitle" = "ローカル LLM で動く、プライバシー重視の議事録アプリ";
+"onboarding.welcome.detail" = "あなたの音声と発言内容は、すべてこの Mac の中だけで処理されます。クラウドに送信されることはありません。";
+"onboarding.permissions.title" = "必要な権限";
+"onboarding.permissions.mic" = "マイク: あなたの発言を文字起こしするために使います。";
+"onboarding.permissions.screen" = "画面録画: 他アプリの音声 (Zoom や Meet の相手の声など) を取り込むために必要。映像は録画しません。";
+"onboarding.permissions.detail" = "初回録音時に macOS の許可ダイアログが出るので「許可」を選んでください。";
+"onboarding.llm.title" = "LLM バックエンド";
+"onboarding.llm.detail" = "サマリと議題抽出に使う LLM を選びます。後で変更可能です。";
+"onboarding.llm.mlx_recommend" = "MLX を推奨。アプリ単独で動き、外部依存なし。初回録音時にモデルが自動 DL されます (約 2〜5 GB)。";
+"onboarding.audio.title" = "オーディオ設定";
+"onboarding.audio.detail" = "音声の取り込み方法を選びます。あとで設定画面から変更できます。";
+"onboarding.audio.recommend" = "推奨: ヘッドホンで会議に参加し、システム音声 + マイクを両方ON、AEC は OFF、必要なら話者分離を ON。";
+"onboarding.usage.title" = "使い方";
+"onboarding.usage.step_record" = "サイドバー左上の「録音開始」を押して会議を録音。";
+"onboarding.usage.step_project" = "右上の「📁+」でプロジェクトを作成すると議事録を整理できます。";
+"onboarding.usage.step_view" = "録音中は字幕・サマリ・抽出された議事がリアルタイムで表示されます。";
+"onboarding.usage.step_finish" = "停止すると自動でタイトルが生成され、議事録として保存されます。";
+"onboarding.next" = "次へ";
+"onboarding.back" = "戻る";
+"onboarding.finish" = "始める";
+"onboarding.skip" = "スキップ";
+"onboarding.show_again" = "次回以降表示しない";
+"onboarding.menu" = "チュートリアルを再表示";

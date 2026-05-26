@@ -1,4 +1,5 @@
 import SwiftUI
+import GijirokuCore
 import GijirokuLLM
 
 struct SettingsView: View {
@@ -10,35 +11,38 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             generalTab
-                .tabItem { Label("一般", systemImage: "gear") }
+                .tabItem { Label(loc: "settings.tab.general", systemImage: "gear") }
                 .padding()
             llmTab
-                .tabItem { Label("LLM", systemImage: "brain") }
+                .tabItem { Label(loc: "settings.tab.llm", systemImage: "brain") }
+                .padding()
+            templateTab
+                .tabItem { Label(loc: "settings.tab.templates", systemImage: "doc.text") }
                 .padding()
             audioTab
-                .tabItem { Label("オーディオ", systemImage: "waveform") }
+                .tabItem { Label(loc: "settings.tab.audio", systemImage: "waveform") }
                 .padding()
             advancedTab
-                .tabItem { Label("詳細", systemImage: "slider.horizontal.3") }
+                .tabItem { Label(loc: "settings.tab.advanced", systemImage: "slider.horizontal.3") }
                 .padding()
         }
-        .frame(width: 600, height: 420)
+        .frame(width: 640, height: 560)
         .task { await refreshAll() }
     }
 
     private var generalTab: some View {
         Form {
-            Picker("文字起こしモデル", selection: $settings.whisperModel) {
+            Picker(L10n.string("settings.transcription_model"), selection: $settings.whisperModel) {
                 ForEach(WhisperModelChoice.allCases) { choice in
                     Text(choice.displayName).tag(choice.rawValue)
                 }
             }
-            Picker("言語", selection: $settings.whisperLanguage) {
+            Picker(L10n.string("settings.language"), selection: $settings.whisperLanguage) {
                 ForEach(WhisperLanguage.allCases) { lang in
                     Text(lang.displayName).tag(lang.rawValue)
                 }
             }
-            Text("変更は次回の Start から有効になります。")
+            Text(loc: "settings.takes_effect_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -46,12 +50,12 @@ struct SettingsView: View {
 
     private var llmTab: some View {
         Form {
-            Picker("バックエンド", selection: Binding(
+            Picker(L10n.string("settings.backend"), selection: Binding(
                 get: { settings.llmBackend },
                 set: { settings.llmBackend = $0; Task { await refreshModels() } }
             )) {
                 ForEach(LLMBackend.allCases) { backend in
-                    Text(backend.displayName).tag(backend)
+                    Text(backendDisplay(backend)).tag(backend)
                 }
             }
 
@@ -66,32 +70,47 @@ struct SettingsView: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                .help("モデル一覧を再読み込み")
+                .help(L10n.string("settings.refresh_models_help"))
             }
 
             if settings.llmBackend == .ollama {
-                TextField("Ollama URL", text: $settings.ollamaBaseURL, onCommit: {
+                TextField(L10n.string("settings.ollama_url"), text: $settings.ollamaBaseURL, onCommit: {
                     Task { await refreshModels() }
                 })
-                Text("Ollama サーバーが起動していて、モデルが pull 済みである必要があります。")
+                Text(loc: "settings.ollama_caption")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("初回選択時に HuggingFace から自動ダウンロードされます（数 GB、ネット接続必須）。")
+                Text(loc: "settings.mlx_caption")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
     }
 
+    private func backendDisplay(_ backend: LLMBackend) -> String {
+        switch backend {
+        case .mlx: return L10n.string("llm.backend.mlx")
+        case .ollama: return L10n.string("llm.backend.ollama")
+        }
+    }
+
     private var modelPicker: some View {
-        Picker("モデル", selection: currentModelBinding) {
+        Picker(L10n.string("settings.model"), selection: currentModelBinding) {
             if availableModels.isEmpty {
-                Text(modelsLoading ? "読み込み中..." : "(該当モデルなし)").tag("")
+                Text(modelsLoading ? L10n.string("settings.loading") : L10n.string("settings.no_models")).tag("")
             } else {
                 ForEach(availableModels) { model in
                     HStack {
                         Text(model.displayName)
+                        if let tag = model.catalogTag {
+                            Text(L10n.string("model.tag.\(tagKey(tag))"))
+                                .font(.caption2)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.15))
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        }
                         if let size = model.sizeEstimate {
                             Text("· \(size)")
                                 .foregroundStyle(.secondary)
@@ -104,6 +123,16 @@ struct SettingsView: View {
                     .tag(model.id)
                 }
             }
+        }
+    }
+
+    private func tagKey(_ tag: ModelTag) -> String {
+        switch tag {
+        case .lightweight: return "lightweight"
+        case .default: return "default"
+        case .multilingual: return "multilingual"
+        case .highAccuracy: return "high_accuracy"
+        case .largeMemory: return "large_memory"
         }
     }
 
@@ -124,36 +153,54 @@ struct SettingsView: View {
 
     private var audioTab: some View {
         Form {
-            Toggle("システム音声をキャプチャ", isOn: $settings.captureSystemAudio)
-            Toggle("マイクをキャプチャ", isOn: $settings.captureMicrophone)
-            Toggle("エコーキャンセル (AEC + ノイズ抑制 + AGC)", isOn: $settings.voiceProcessingEnabled)
+            Toggle(L10n.string("settings.capture_system"), isOn: $settings.captureSystemAudio)
+            Toggle(L10n.string("settings.capture_mic"), isOn: $settings.captureMicrophone)
+            Toggle(L10n.string("settings.voice_processing"), isOn: $settings.voiceProcessingEnabled)
+            Toggle(L10n.string("settings.diarization"), isOn: $settings.diarizationEnabled)
 
             HStack {
-                Picker("入力デバイス", selection: $settings.preferredInputDeviceUID) {
-                    Text("システムのデフォルト").tag("")
+                Picker(L10n.string("settings.input_device"), selection: $settings.preferredInputDeviceUID) {
+                    Text(loc: "settings.input_default").tag("")
                     ForEach(inputDevices) { dev in
                         Text(dev.name).tag(dev.uid)
                     }
                 }
-                Button("再読込") { refreshDevices() }
+                Button(L10n.string("settings.reload")) { refreshDevices() }
                     .buttonStyle(.borderless)
             }
 
-            Text("システム音声は ScreenCaptureKit 経由でキャプチャします。初回利用時に macOS が「画面録画」権限のプロンプトを出すので許可してください（映像は録画しません）。")
+            Text(loc: "settings.system_audio_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("エコーキャンセルは Apple の VoiceProcessingIO を使い、スピーカー出力をリファレンスにマイク入力からエコーを除去します。スピーカー出力でビデオ会議をする場合に、相手の声が二重に文字起こしされるのを防ぐ標準対策です。ヘッドホン使用時は OFF でも問題ありません。")
+            Text(loc: "settings.voice_processing_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Text(loc: "settings.diarization_caption")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var templateTab: some View {
+        ScrollView {
+            StyleEditor(
+                style: Binding(
+                    get: { settings.userSummaryStyle },
+                    set: { settings.updateUserSummaryStyle($0) }
+                ),
+                scopeLabel: L10n.string("style.user_label"),
+                caption: L10n.string("settings.template_caption")
+            )
+            .padding(.bottom, 16)
         }
     }
 
     private var advancedTab: some View {
         Form {
             Stepper(value: $settings.summaryUpdateInterval, in: 10...300, step: 5) {
-                Text("サマリ更新間隔: \(Int(settings.summaryUpdateInterval)) 秒")
+                Text(L10n.format("settings.summary_interval_format", Int(settings.summaryUpdateInterval)))
             }
-            Text("短すぎると Ollama / MLX 推論が間に合わず重くなります。30〜60 秒推奨。")
+            Text(loc: "settings.summary_interval_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

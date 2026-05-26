@@ -8,9 +8,12 @@ public enum LLMBackend: String, Codable, CaseIterable, Sendable, Identifiable {
     public var id: String { rawValue }
 
     public var displayName: String {
+        // GijirokuLLM is shared with the CLI; we don't pull L10n here.
+        // The SwiftUI Settings view in the app target localizes the
+        // label when rendering by mapping rawValue → key.
         switch self {
-        case .mlx: return "MLX (オンデバイス・依存なし)"
-        case .ollama: return "Ollama (外部サーバー)"
+        case .mlx: return "MLX (on-device)"
+        case .ollama: return "Ollama (external server)"
         }
     }
 }
@@ -37,15 +40,55 @@ public protocol AvailableModelsProvider: Sendable {
 }
 
 public enum MLXModelCatalog {
-    /// HuggingFace `mlx-community/` 系のキュレートモデルリスト。
-    /// 日本語/英語の両対応・4bit 量子化済みでローカル動作向け。
+    /// Curated list of `mlx-community/` HuggingFace models, sorted from
+    /// lightest to largest. Display names are kept in English so the same
+    /// label renders cleanly in both Japanese and English UI; the size /
+    /// suitability hints (small / recommended / etc.) are added separately
+    /// by the picker views via the localized tag table.
+    ///
+    /// Note: Qwen3 family is a reasoning model that emits `<think>` blocks
+    /// (the app already strips them).
     public static let recommended: [ModelInfo] = [
-        .init(id: "mlx-community/Qwen3-4B-4bit", displayName: "Qwen3 4B (4bit, 多言語)", backend: .mlx, sizeEstimate: "~2.5 GB"),
-        .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen2.5 7B Instruct (4bit, 多言語)", backend: .mlx, sizeEstimate: "~4.2 GB"),
-        .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B Instruct (4bit)", backend: .mlx, sizeEstimate: "~1.8 GB"),
-        .init(id: "mlx-community/gemma-3-4b-it-4bit", displayName: "Gemma 3 4B IT (4bit)", backend: .mlx, sizeEstimate: "~2.5 GB"),
-        .init(id: "mlx-community/Mistral-7B-Instruct-v0.3-4bit", displayName: "Mistral 7B Instruct v0.3 (4bit)", backend: .mlx, sizeEstimate: "~4.0 GB"),
+        // Light (small / fast / lower quality)
+        .init(id: "mlx-community/Qwen3-1.7B-4bit", displayName: "Qwen3 1.7B 4bit", backend: .mlx, sizeEstimate: "~1.1 GB"),
+        .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B Instruct 4bit", backend: .mlx, sizeEstimate: "~1.8 GB"),
+        // Standard (balanced — Qwen3 4B is the default)
+        .init(id: "mlx-community/Qwen3-4B-4bit", displayName: "Qwen3 4B 4bit", backend: .mlx, sizeEstimate: "~2.5 GB"),
+        .init(id: "mlx-community/gemma-3-4b-it-4bit", displayName: "Gemma 3 4B IT 4bit", backend: .mlx, sizeEstimate: "~2.5 GB"),
+        // Mid (higher quality if you have RAM headroom)
+        .init(id: "mlx-community/Mistral-7B-Instruct-v0.3-4bit", displayName: "Mistral 7B Instruct v0.3 4bit", backend: .mlx, sizeEstimate: "~4.0 GB"),
+        .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen2.5 7B Instruct 4bit", backend: .mlx, sizeEstimate: "~4.2 GB"),
+        .init(id: "mlx-community/gemma-2-9b-it-4bit", displayName: "Gemma 2 9B IT 4bit", backend: .mlx, sizeEstimate: "~5.4 GB"),
+        // Large (Apple Silicon + 32GB+ RAM)
+        .init(id: "mlx-community/Llama-3.1-8B-Instruct-4bit", displayName: "Llama 3.1 8B Instruct 4bit", backend: .mlx, sizeEstimate: "~4.5 GB"),
+        .init(id: "mlx-community/Qwen2.5-14B-Instruct-4bit", displayName: "Qwen2.5 14B Instruct 4bit", backend: .mlx, sizeEstimate: "~8.2 GB"),
     ]
+}
+
+/// Localized tags shown next to model picker entries. Kept here (not in the
+/// catalog struct itself) so the App layer can drive localization. Used by
+/// SettingsView / OnboardingView through a helper.
+public enum ModelTag: String, Sendable {
+    case lightweight
+    case `default`
+    case multilingual
+    case highAccuracy
+    case largeMemory
+}
+
+public extension ModelInfo {
+    /// Returns the catalog tag for built-in MLX models, or nil for downloaded
+    /// Ollama models (we don't tag those).
+    var catalogTag: ModelTag? {
+        switch id {
+        case "mlx-community/Qwen3-1.7B-4bit": return .lightweight
+        case "mlx-community/Qwen3-4B-4bit": return .default
+        case "mlx-community/Qwen2.5-7B-Instruct-4bit": return .multilingual
+        case "mlx-community/gemma-2-9b-it-4bit": return .highAccuracy
+        case "mlx-community/Qwen2.5-14B-Instruct-4bit": return .largeMemory
+        default: return nil
+        }
+    }
 }
 
 public struct MLXAvailableModelsProvider: AvailableModelsProvider {

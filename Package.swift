@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "GijirokuTaker",
+    defaultLocalization: "ja",
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "GijirokuTaker", targets: ["GijirokuTaker"]),
@@ -22,8 +23,12 @@ let package = Package(
                 "GijirokuCore",
                 "GijirokuLLM",
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
+                .product(name: "SpeakerKit", package: "argmax-oss-swift"),
             ],
-            path: "Sources/GijirokuTaker"
+            path: "Sources/GijirokuTaker",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .executableTarget(
             name: "GijirokuCLI",

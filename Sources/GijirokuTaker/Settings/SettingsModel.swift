@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import GijirokuCore
 import GijirokuLLM
 
 @MainActor
@@ -18,6 +19,9 @@ final class SettingsModel: ObservableObject {
         static let preferredInputDeviceUID = "preferredInputDeviceUID"
         static let ollamaBaseURL = "ollamaBaseURL"
         static let voiceProcessing = "voiceProcessing"
+        static let userSummaryStyleJSON = "userSummaryStyleJSON"
+        static let diarizationEnabled = "diarizationEnabled"
+        static let onboardingCompleted = "onboardingCompleted"
     }
 
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
@@ -32,11 +36,39 @@ final class SettingsModel: ObservableObject {
     @AppStorage(Keys.captureMicrophone) var captureMicrophone: Bool = true
     @AppStorage(Keys.preferredInputDeviceUID) var preferredInputDeviceUID: String = ""
     @AppStorage(Keys.ollamaBaseURL) var ollamaBaseURL: String = "http://127.0.0.1:11434"
-    // Apple の VoiceProcessingIO を有効化すると、システム出力（スピーカー側の信号）
-    // をリファレンスにマイク入力からエコーをキャンセルする。ヘッドホンでない会議で
-    // 「スピーカーから出た相手の声」がマイクに回り込んで二重 transcript される
-    // 問題の標準的な対策。副作用としてノイズ抑制と自動ゲイン制御も入る。
-    @AppStorage(Keys.voiceProcessing) var voiceProcessingEnabled: Bool = true
+    // Apple の VoiceProcessingIO（AEC + ノイズ抑制 + AGC）。会議相手の声が
+    // マイクに回り込んで二重 transcript される問題への対策だが、副作用として
+    // スピーカー出力が ducking されたり、音質が変わったり、長時間の安定性に
+    // 影響することがあるためデフォルト OFF。ヘッドホンを使えば回り込み自体が
+    // ほぼ起きないので、推奨運用はヘッドホン + AEC OFF。
+    @AppStorage(Keys.voiceProcessing) var voiceProcessingEnabled: Bool = false
+    /// Pyannote (SpeakerKit) ベースの話者分離を有効化するか。初回利用時に
+    /// segmentation + embedding の CoreML モデル (~30MB) が DL される。
+    /// ローリング窓ごとに diarize するので、Speaker ラベルは「同じ窓内」では
+    /// 一貫するが、窓を跨ぐと別の人に再割当される可能性がある（v2 で
+    /// 永続クラスタリングを検討）。
+    @AppStorage(Keys.diarizationEnabled) var diarizationEnabled: Bool = false
+    /// Tracks whether the first-launch onboarding sheet has been shown and
+    /// dismissed. UI offers a menu command to re-show it later.
+    @AppStorage(Keys.onboardingCompleted) var onboardingCompleted: Bool = false
+    /// JSON-encoded user-level SummaryStyle. Stored via @AppStorage so SwiftUI
+    /// views update reactively, accessed through `userSummaryStyle` accessors.
+    @AppStorage(Keys.userSummaryStyleJSON) var userSummaryStyleJSON: String = ""
+
+    var userSummaryStyle: SummaryStyle {
+        guard !userSummaryStyleJSON.isEmpty,
+              let data = userSummaryStyleJSON.data(using: .utf8),
+              let style = try? JSONDecoder().decode(SummaryStyle.self, from: data) else {
+            return SummaryStyle()
+        }
+        return style
+    }
+
+    func updateUserSummaryStyle(_ style: SummaryStyle) {
+        guard let data = try? JSONEncoder().encode(style),
+              let str = String(data: data, encoding: .utf8) else { return }
+        userSummaryStyleJSON = str
+    }
 
     var llmBackend: LLMBackend {
         get { LLMBackend(rawValue: llmBackendRaw) ?? .mlx }
@@ -57,16 +89,22 @@ enum WhisperModelChoice: String, CaseIterable, Identifiable {
     case tiny = "tiny"
     case base = "base"
     case small = "small"
+    case medium = "medium"
+    case largeV3 = "large-v3"
     case largeV3Turbo = "large-v3-v20240930_626MB"
+    case largeV3Full = "large-v3-v20240930_949MB"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .tiny: return "tiny (約 75MB、最速、精度低)"
-        case .base: return "base (約 145MB)"
-        case .small: return "small (約 470MB)"
-        case .largeV3Turbo: return "large-v3-turbo (約 626MB、多言語推奨)"
+        case .tiny: return L10n.string("whisper.tiny")
+        case .base: return L10n.string("whisper.base")
+        case .small: return L10n.string("whisper.small")
+        case .medium: return L10n.string("whisper.medium")
+        case .largeV3: return L10n.string("whisper.large_v3")
+        case .largeV3Turbo: return L10n.string("whisper.large_v3_turbo")
+        case .largeV3Full: return L10n.string("whisper.large_v3_full")
         }
     }
 }
@@ -80,9 +118,9 @@ enum WhisperLanguage: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .ja: return "日本語"
-        case .en: return "English"
-        case .auto: return "自動判定"
+        case .ja: return L10n.string("whisper.language.ja")
+        case .en: return L10n.string("whisper.language.en")
+        case .auto: return L10n.string("whisper.language.auto")
         }
     }
 }

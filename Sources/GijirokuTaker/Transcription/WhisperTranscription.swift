@@ -2,6 +2,7 @@ import Foundation
 import OSLog
 import GijirokuCore
 import WhisperKit
+import SpeakerKit
 
 // WhisperKit also defines a public `AudioChunk` struct that collides with
 // GijirokuCore.AudioChunk. We refer to ours by module-qualified name throughout
@@ -12,17 +13,20 @@ public actor WhisperTranscription: TranscriptionEngine {
         public let language: String
         public let windowSeconds: TimeInterval
         public let inferenceInterval: TimeInterval
+        public let diarizationEnabled: Bool
 
         public init(
             modelName: String = "large-v3-v20240930_626MB",
             language: String = "ja",
             windowSeconds: TimeInterval = 25,
-            inferenceInterval: TimeInterval = 5
+            inferenceInterval: TimeInterval = 5,
+            diarizationEnabled: Bool = false
         ) {
             self.modelName = modelName
             self.language = language
             self.windowSeconds = windowSeconds
             self.inferenceInterval = inferenceInterval
+            self.diarizationEnabled = diarizationEnabled
         }
     }
 
@@ -88,6 +92,10 @@ public actor WhisperTranscription: TranscriptionEngine {
     private let logger = Logger(subsystem: "com.gijirokutaker.app", category: "WhisperTranscription")
     private let config: Config
     private var whisper: WhisperKit?
+    private var speakerKit: SpeakerKit?
+    /// Cross-window stable label assigner. Resets per session inside
+    /// `transcribe(_:)`.
+    private let speakerTracker = SpeakerTracker()
 
     public init(config: Config = .init()) {
         self.config = config
@@ -102,9 +110,29 @@ public actor WhisperTranscription: TranscriptionEngine {
         return kit
     }
 
+    /// Lazily loads SpeakerKit. Returns nil (with a logged error) if loading
+    /// fails so transcription can still proceed without diarization.
+    private func ensureSpeakerLoaded() async -> SpeakerKit? {
+        if let speakerKit { return speakerKit }
+        do {
+            fputs("[WhisperTranscription] loading SpeakerKit...\n", stderr)
+            logger.info("Loading SpeakerKit (pyannote, ~30MB on first use)...")
+            let kit = try await SpeakerKit()
+            speakerKit = kit
+            logger.info("SpeakerKit loaded.")
+            fputs("[WhisperTranscription] SpeakerKit loaded\n", stderr)
+            return kit
+        } catch {
+            logger.error("SpeakerKit load failed: \(error.localizedDescription, privacy: .public)")
+            fputs("[WhisperTranscription] SpeakerKit load failed: \(error.localizedDescription)\n", stderr)
+            return nil
+        }
+    }
+
     public nonisolated func transcribe(_ chunks: AsyncStream<GijirokuCore.AudioChunk>) -> AsyncStream<TranscriptSegment> {
         AsyncStream { continuation in
             Task {
+                await self.speakerTracker.reset()
                 await self.run(chunks: chunks, output: continuation)
             }
         }
@@ -180,29 +208,96 @@ public actor WhisperTranscription: TranscriptionEngine {
             let results = try await whisper.transcribe(audioArray: samples, decodeOptions: options)
             let totalSegments = results.reduce(0) { $0 + $1.segments.count }
             logger.info("\(String(describing: source), privacy: .public) result: results=\(results.count, privacy: .public) segments=\(totalSegments, privacy: .public)")
+
+            // Optionally run speaker diarization over the same audio window.
+            // Two-step labeling:
+            //   1. Local (per-window) diarization gives us
+            //      [(start, end, "speakerId(0)"), ...]
+            //   2. SpeakerTracker maps those window-local labels into stable
+            //      cross-window labels ("Speaker 1", "Speaker 2", ...) by
+            //      finding the historical stable span that has maximum time
+            //      overlap with the new local span.
+            let speakerSpans = await diarizationSpans(samples: samples)
+            let labelMap: [String: String]
+            if speakerSpans.isEmpty {
+                labelMap = [:]
+            } else {
+                let absoluteSpans = speakerSpans.map { span in
+                    SpeakerTracker.AbsoluteSpan(
+                        start: bufferStartedAt.addingTimeInterval(span.start),
+                        end: bufferStartedAt.addingTimeInterval(span.end),
+                        localLabel: span.speaker
+                    )
+                }
+                labelMap = await speakerTracker.resolve(spans: absoluteSpans)
+            }
+
             for result in results {
                 for seg in result.segments {
                     let raw: String = seg.text
                     let text = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                     guard !text.isEmpty else { continue }
-                    // Whisper は無音区間でよく出る定型句をハルシネーションしがち。除外する。
                     if Self.hallucinationPatterns.contains(text) { continue }
                     let segStart = bufferStartedAt.addingTimeInterval(TimeInterval(seg.start))
                     let segEnd = bufferStartedAt.addingTimeInterval(TimeInterval(seg.end))
+                    let midpoint = (Double(seg.start) + Double(seg.end)) / 2
+                    let localSpeaker = Self.speaker(at: midpoint, in: speakerSpans)
+                    let stableSpeaker = localSpeaker.flatMap { labelMap[$0] } ?? localSpeaker
                     let transcript = TranscriptSegment(
                         source: source,
+                        speaker: stableSpeaker,
                         text: text,
                         startTime: segStart,
                         endTime: segEnd,
                         isFinal: false
                     )
                     let preview = text.prefix(60)
-                    logger.info("\(String(describing: source), privacy: .public) seg: \"\(String(preview), privacy: .public)\"")
+                    logger.info("\(String(describing: source), privacy: .public) seg: \"\(String(preview), privacy: .public)\" speaker=\(stableSpeaker ?? "-", privacy: .public)")
                     output.yield(transcript)
                 }
             }
         } catch {
             logger.error("Inference failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// A `(start, end, speaker)` span produced by SpeakerKit. Callers map
+    /// transcription segments into speakers by checking which span their
+    /// midpoint falls into.
+    fileprivate struct SpeakerSpan: Sendable {
+        let start: Double
+        let end: Double
+        let speaker: String
+    }
+
+    /// Runs SpeakerKit diarization (when enabled and loaded) and returns the
+    /// resulting list of speaker time spans. Returns empty on failure / when
+    /// disabled so callers fall back to non-attributed segments.
+    private func diarizationSpans(samples: [Float]) async -> [SpeakerSpan] {
+        guard config.diarizationEnabled else { return [] }
+        guard let speakerKit = await ensureSpeakerLoaded() else { return [] }
+        do {
+            let diarization = try await speakerKit.diarize(audioArray: samples)
+            // `diarization.segments` exposes (start, end, speaker) entries.
+            // Convert to our internal Sendable representation.
+            let spans = diarization.segments.map { seg in
+                SpeakerSpan(
+                    start: Double(seg.startTime),
+                    end: Double(seg.endTime),
+                    speaker: String(describing: seg.speaker)
+                )
+            }
+            logger.info("Diarization: \(diarization.speakerCount, privacy: .public) speaker(s), \(spans.count, privacy: .public) span(s)")
+            return spans
+        } catch {
+            logger.error("Diarization failed: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    /// Returns the speaker label whose span contains `time` (in seconds
+    /// relative to the audio buffer), or nil if none.
+    fileprivate static func speaker(at time: Double, in spans: [SpeakerSpan]) -> String? {
+        spans.first(where: { time >= $0.start && time <= $0.end })?.speaker
     }
 }

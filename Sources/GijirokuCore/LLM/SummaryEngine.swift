@@ -26,9 +26,11 @@ public actor SummaryEngine {
     public struct Config: Sendable {
         public let model: String
         public let language: String
-        public init(model: String = "qwen2.5:7b", language: String = "auto") {
+        public let style: SummaryStyle
+        public init(model: String = "qwen2.5:7b", language: String = "auto", style: SummaryStyle = .builtin) {
             self.model = model
             self.language = language
+            self.style = style
         }
     }
 
@@ -58,7 +60,8 @@ public actor SummaryEngine {
         let messages = SummaryPrompt.update(
             existing: current,
             transcriptDelta: delta,
-            language: config.language
+            language: config.language,
+            style: config.style
         )
         fputs("[SummaryEngine] calling client.chat model=\(config.model) messages=\(messages.count)\n", stderr)
         let response = try await client.chat(model: config.model, messages: messages, format: .json)
@@ -85,17 +88,42 @@ public actor SummaryEngine {
     }
 
     /// Normalizes a raw LLM response into a JSON object string.
-    /// Handles three common patterns:
+    /// Handles four common patterns:
     ///   1. The response is already pure JSON.
     ///   2. The JSON is wrapped in a markdown code fence (```json ... ```).
     ///   3. The JSON is surrounded by prose ("Here is the summary: {...} Let me know if...").
+    ///   4. Reasoning models (Qwen3, DeepSeek R1, etc.) emit
+    ///      `<think>...</think>` chain-of-thought blocks before the answer.
     /// Throws `LLMParseError.noJSONObject` if no balanced `{ ... }` pair is found.
     static func extractJSONPayload(_ raw: String) throws -> String {
-        let unfenced = stripJSONFences(raw)
+        let dethought = stripThinkBlocks(raw)
+        let unfenced = stripJSONFences(dethought)
         if let extracted = firstBalancedJSONObject(in: unfenced) {
             return extracted
         }
         throw LLMParseError.noJSONObject
+    }
+
+    /// Strips `<think>...</think>` chain-of-thought blocks emitted by
+    /// reasoning models. An unclosed `<think>` is treated as "everything from
+    /// here on is internal" and dropped. Public so other modules (AppModel's
+    /// title sanitizer) can reuse the same parser.
+    public static func stripThinkBlocks(_ s: String) -> String {
+        var result = s
+        while let openRange = result.range(of: "<think>", options: [.caseInsensitive]) {
+            if let closeRange = result.range(
+                of: "</think>",
+                options: [.caseInsensitive],
+                range: openRange.upperBound..<result.endIndex
+            ) {
+                result.removeSubrange(openRange.lowerBound..<closeRange.upperBound)
+            } else {
+                // Open tag with no close tag: dump everything from <think> onward.
+                result.removeSubrange(openRange.lowerBound..<result.endIndex)
+                break
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func stripJSONFences(_ s: String) -> String {
@@ -159,9 +187,16 @@ public enum LLMParseError: Error, Equatable {
 }
 
 enum SummaryPrompt {
-    static func update(existing: CumulativeSummary, transcriptDelta: String, language: String) -> [LLMMessage] {
+    static func update(existing: CumulativeSummary, transcriptDelta: String, language: String, style: SummaryStyle = .builtin) -> [LLMMessage] {
         let existingJSON = (try? String(data: JSONEncoder().encode(existing), encoding: .utf8)) ?? "{}"
         let langHint = language == "auto" ? "the dominant language of the transcript" : language
+        let bulletLimit = style.maxBulletWords > 0 ? style.maxBulletWords : 14
+        let sectionCap = style.maxSections > 0
+            ? "\n- Use at most \(style.maxSections) sections total. Merge or reorganize if you exceed the cap."
+            : ""
+        let extra = style.extraSummaryInstructions.isEmpty
+            ? ""
+            : "\n\nAdditional user instructions:\n\(style.extraSummaryInstructions)"
         let system = """
         You are a meeting note-taker. You receive the current cumulative summary as JSON and new transcript segments since the last update.
         Output an updated summary as JSON only, with no prose and no markdown fences:
@@ -169,9 +204,9 @@ enum SummaryPrompt {
         Rules:
         - Append bullets to the relevant existing section when the topic continues.
         - Start a new section when the topic clearly shifts.
-        - Keep each bullet concise (max 14 words).
-        - Preserve section order; new sections go at the end.
-        - Write in \(langHint).
+        - Keep each bullet concise (max \(bulletLimit) words).
+        - Preserve section order; new sections go at the end.\(sectionCap)
+        - Write in \(langHint).\(extra)
         """
         let user = """
         ## Current summary (JSON)
