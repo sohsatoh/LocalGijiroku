@@ -13,6 +13,7 @@ import GijirokuCore
 struct SessionDetailView: View {
     let sessionID: UUID
     @EnvironmentObject private var library: LibraryModel
+    @ObservedObject private var settings = SettingsModel.shared
     @State private var loadedSession: Session?
     @State private var lastReloadStamp: Date = .distantPast
     @State private var editingStyle: Session?
@@ -29,11 +30,16 @@ struct SessionDetailView: View {
             if let session = loadedSession {
                 HSplitView {
                     TranscriptPane(
-                        turns: TranscriptTurnGrouping.turns(from: session.transcript),
+                        segments: session.transcript,
+                        // Saved sessions have no live tail — recording is
+                        // long done. Pass an empty map.
+                        liveTail: [:],
                         // For saved sessions, "diarization enabled" can be
                         // inferred from the data itself: if any segment has a
                         // speaker label, the session was diarized.
-                        showDiarizationPlaceholder: session.transcript.contains { $0.speaker != nil }
+                        showDiarizationPlaceholder: session.transcript.contains { $0.speaker != nil },
+                        layoutMode: settings.transcriptLayoutMode,
+                        fontSize: CGFloat(settings.transcriptFontSize)
                     )
                         .frame(minWidth: 280, idealWidth: 360)
                     SummaryPane(summary: session.summary)

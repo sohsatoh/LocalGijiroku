@@ -84,11 +84,11 @@ struct RecordingView: View {
             Divider()
             HSplitView {
                 TranscriptPane(
-                    turns: TranscriptTurnGrouping.turns(
-                        from: model.transcript,
-                        liveTail: model.liveTail
-                    ),
-                    showDiarizationPlaceholder: model.diarizationEnabled
+                    segments: model.transcript,
+                    liveTail: model.liveTail,
+                    showDiarizationPlaceholder: model.diarizationEnabled,
+                    layoutMode: settings.transcriptLayoutMode,
+                    fontSize: CGFloat(settings.transcriptFontSize)
                 )
                     .frame(minWidth: 280, idealWidth: 360)
                 SummaryPane(summary: model.summary)
@@ -176,49 +176,187 @@ struct RecordingView: View {
 
 // MARK: - Panes
 
+/// Two-mode transcript pane:
+///   - `.rows`: pre-streaming-UI behaviour — every confirmed segment AND
+///     the live tail slot per source render as separate boxed rows, with
+///     italic / dimmed styling for unconfirmed text. This is what the
+///     app shipped with at commit 9bb0828 and remains the default.
+///   - `.turns`: Notion-style speaker turns + paragraph splits + inline
+///     live tail. Opt-in via Settings → General.
 struct TranscriptPane: View {
-    let turns: [TranscriptTurn]
+    let segments: [TranscriptSegment]
+    let liveTail: [AudioSource: TranscriptSegment]
     var showDiarizationPlaceholder: Bool = false
+    var layoutMode: TranscriptLayoutMode = .rows
+    var fontSize: CGFloat = 13
 
     var body: some View {
         PaneContainer(
             title: L10n.string("pane.transcript.title"),
             systemImage: "text.bubble",
-            isEmpty: turns.isEmpty,
+            isEmpty: isEmpty,
             emptyMessage: L10n.string("pane.transcript.placeholder"),
             emptySystemImage: "waveform.path"
         ) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        ForEach(turns) { turn in
-                            TranscriptTurnBlock(
-                                turn: turn,
-                                showDiarizationPlaceholder: showDiarizationPlaceholder
-                            )
-                            .id(turn.id)
-                        }
+            switch layoutMode {
+            case .rows:
+                rowsBody
+            case .turns:
+                turnsBody
+            }
+        }
+    }
+
+    private var isEmpty: Bool {
+        switch layoutMode {
+        case .rows: return rowSegments.isEmpty
+        case .turns: return turns.isEmpty
+        }
+    }
+
+    /// Confirmed transcript + live tails per source, sorted by time, so
+    /// the rows layout renders the rolling tail as its own row in
+    /// chronological place.
+    private var rowSegments: [TranscriptSegment] {
+        var combined = segments
+        combined.append(contentsOf: liveTail.values)
+        combined.sort { $0.startTime < $1.startTime }
+        return combined
+    }
+
+    private var turns: [TranscriptTurn] {
+        TranscriptTurnGrouping.turns(from: segments, liveTail: liveTail)
+    }
+
+    private var rowsBody: some View {
+        let items = rowSegments
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(items) { seg in
+                        TranscriptRow(
+                            segment: seg,
+                            showDiarizationPlaceholder: showDiarizationPlaceholder,
+                            fontSize: fontSize
+                        )
+                        .id(seg.id)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
                 }
-                .onChange(of: turns.last?.id) { _, newValue in
-                    guard let newValue else { return }
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(newValue, anchor: .bottom)
-                    }
-                }
-                // Also nudge the scroll when the most recent turn just
-                // gained tail text — otherwise long-running live tails
-                // sit below the fold while the user can't see them grow.
-                .onChange(of: turns.last?.liveTail?.text) { _, _ in
-                    guard let id = turns.last?.id else { return }
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+            .onChange(of: items.last?.id) { _, newValue in
+                guard let newValue else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(newValue, anchor: .bottom)
                 }
             }
         }
+    }
+
+    private var turnsBody: some View {
+        let items = turns
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    ForEach(items) { turn in
+                        TranscriptTurnBlock(
+                            turn: turn,
+                            showDiarizationPlaceholder: showDiarizationPlaceholder,
+                            fontSize: fontSize
+                        )
+                        .id(turn.id)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .onChange(of: items.last?.id) { _, newValue in
+                guard let newValue else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(newValue, anchor: .bottom)
+                }
+            }
+            .onChange(of: items.last?.liveTail?.text) { _, _ in
+                guard let id = items.last?.id else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(id, anchor: .bottom)
+                }
+            }
+        }
+    }
+}
+
+/// Per-segment row used by the `.rows` transcript layout. Boxed card with
+/// a colored left accent, speaker/source/time header, and italic + 0.55
+/// opacity body when the segment is still in Whisper's rolling tail.
+private struct TranscriptRow: View {
+    let segment: TranscriptSegment
+    let showDiarizationPlaceholder: Bool
+    let fontSize: CGFloat
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Rectangle()
+                .fill(accentColor)
+                .frame(width: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 1.5, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if let speaker = segment.speaker {
+                        SpeakerBadge(label: speaker)
+                    } else if showDiarizationPlaceholder {
+                        SpeakerBadge(label: "nomatch")
+                    }
+                    Image(systemName: sourceSymbol)
+                        .font(.caption2)
+                        .foregroundStyle(sourceColor)
+                    Text(Self.timeFormatter.string(from: segment.startTime))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                Text(segment.text)
+                    .font(.system(size: fontSize))
+                    .textSelection(.enabled)
+                    // Unconfirmed (still in Whisper's rolling tail) — render
+                    // dimmed and italic so the user sees the live stream
+                    // but isn't surprised when the wording gets rewritten
+                    // by the next inference pass.
+                    .italic(!segment.isConfirmed)
+                    .opacity(segment.isConfirmed ? 1.0 : 0.55)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 4)
+            .padding(.vertical, 4)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(accentColor.opacity(0.05))
+        )
+    }
+
+    private var accentColor: Color {
+        if let speaker = segment.speaker {
+            return SpeakerPalette.color(for: speaker)
+        }
+        return sourceColor
+    }
+
+    private var sourceSymbol: String {
+        segment.source == .microphone ? "mic.fill" : "speaker.wave.2.fill"
+    }
+
+    private var sourceColor: Color {
+        segment.source == .microphone ? .blue : .green
     }
 }
 
@@ -231,6 +369,7 @@ struct TranscriptPane: View {
 private struct TranscriptTurnBlock: View {
     let turn: TranscriptTurn
     let showDiarizationPlaceholder: Bool
+    let fontSize: CGFloat
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -285,6 +424,7 @@ private struct TranscriptTurnBlock: View {
                 // anchor.
                 if let tail = turn.liveTail {
                     Text(tail.text)
+                        .font(.system(size: fontSize))
                         .italic()
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -298,6 +438,7 @@ private struct TranscriptTurnBlock: View {
                         composedLastParagraph(paragraph, tail: tail.text)
                     } else {
                         Text(paragraph)
+                            .font(.system(size: fontSize))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -327,6 +468,7 @@ private struct TranscriptTurnBlock: View {
             .italic()
             .foregroundStyle(.secondary)
         return combined
+            .font(.system(size: fontSize))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)

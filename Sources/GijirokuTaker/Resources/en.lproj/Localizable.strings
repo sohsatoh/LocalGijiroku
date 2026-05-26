@@ -88,6 +88,12 @@
 "settings.transcription_model" = "Transcription model";
 "settings.language" = "Transcription language";
 "settings.takes_effect_caption" = "Changes take effect on the next Start.";
+"settings.transcript_layout" = "Transcript layout";
+"settings.transcript_layout.rows" = "Per-segment rows (default)";
+"settings.transcript_layout.turns" = "Speaker turns (Notion-style)";
+"settings.transcript_layout.caption" = "Notion-style collapses consecutive speech into one block and renders the unconfirmed rolling tail inline.";
+"settings.transcript_font_size" = "Transcript font size";
+"settings.transcript_font_size.value_format" = "%.0f pt";
 
 /* === Settings: LLM === */
 "settings.backend" = "Backend";

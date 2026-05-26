@@ -62,6 +62,29 @@ struct SettingsView: View {
             Text(loc: "settings.takes_effect_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Divider()
+
+            Picker(L10n.string("settings.transcript_layout"), selection: $settings.transcriptDisplayMode) {
+                ForEach(TranscriptLayoutMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode.rawValue)
+                }
+            }
+            Text(loc: "settings.transcript_layout.caption")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Text(loc: "settings.transcript_font_size")
+                // Range 10–22 pt covers everything from "comfortable
+                // glance" to "presentation mode". Stepper-style slider
+                // keeps integer pt values predictable.
+                Slider(value: $settings.transcriptFontSize, in: 10...22, step: 1)
+                Text(L10n.format("settings.transcript_font_size.value_format", settings.transcriptFontSize))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .trailing)
+            }
         }
     }
 

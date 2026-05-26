@@ -88,6 +88,12 @@
 "settings.transcription_model" = "文字起こしモデル";
 "settings.language" = "文字起こし言語";
 "settings.takes_effect_caption" = "変更は次回の Start から有効になります。";
+"settings.transcript_layout" = "字幕レイアウト";
+"settings.transcript_layout.rows" = "行ごとに表示 (既定)";
+"settings.transcript_layout.turns" = "話者ターン (Notion 風)";
+"settings.transcript_layout.caption" = "Notion 風は連続発話を 1 ブロックにまとめ、未確定の rolling tail をインライン表示します。";
+"settings.transcript_font_size" = "字幕の文字サイズ";
+"settings.transcript_font_size.value_format" = "%.0f pt";
 
 /* === Settings: LLM === */
 "settings.backend" = "バックエンド";

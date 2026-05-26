@@ -24,6 +24,8 @@ final class SettingsModel: ObservableObject {
         static let onboardingCompleted = "onboardingCompleted"
         static let appLanguage = "appLanguage"
         static let paneMarkdownMode = "paneMarkdownMode"
+        static let transcriptDisplayMode = "transcriptDisplayMode"
+        static let transcriptFontSize = "transcriptFontSize"
     }
 
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
@@ -69,6 +71,16 @@ final class SettingsModel: ObservableObject {
     /// JSON-encoded user-level SummaryStyle. Stored via @AppStorage so SwiftUI
     /// views update reactively, accessed through `userSummaryStyle` accessors.
     @AppStorage(Keys.userSummaryStyleJSON) var userSummaryStyleJSON: String = ""
+    /// Transcript layout: `"rows"` renders one boxed row per segment with
+    /// italic / dimmed styling for the unconfirmed rolling tail (the
+    /// pre-streaming-UI default the app shipped with). `"turns"` switches
+    /// to the Notion-style speaker-turn prose blocks with inline tail.
+    /// Default is rows because that's what longtime users expect and what
+    /// reviewers found readable in earlier feedback.
+    @AppStorage(Keys.transcriptDisplayMode) var transcriptDisplayMode: String = TranscriptLayoutMode.rows.rawValue
+    /// Body font size for the transcript pane, in points. Applied to both
+    /// the rows and turns layouts. Range clamped via the Settings slider.
+    @AppStorage(Keys.transcriptFontSize) var transcriptFontSize: Double = 13
 
     var userSummaryStyle: SummaryStyle {
         guard !userSummaryStyleJSON.isEmpty,
@@ -83,6 +95,11 @@ final class SettingsModel: ObservableObject {
         guard let data = try? JSONEncoder().encode(style),
               let str = String(data: data, encoding: .utf8) else { return }
         userSummaryStyleJSON = str
+    }
+
+    var transcriptLayoutMode: TranscriptLayoutMode {
+        get { TranscriptLayoutMode(rawValue: transcriptDisplayMode) ?? .rows }
+        set { transcriptDisplayMode = newValue.rawValue }
     }
 
     var llmBackend: LLMBackend {
@@ -120,6 +137,24 @@ enum WhisperModelChoice: String, CaseIterable, Identifiable {
         case .largeV3: return L10n.string("whisper.large_v3")
         case .largeV3Turbo: return L10n.string("whisper.large_v3_turbo")
         case .largeV3Full: return L10n.string("whisper.large_v3_full")
+        }
+    }
+}
+
+enum TranscriptLayoutMode: String, CaseIterable, Identifiable, Sendable {
+    /// 9bb0828's default: one boxed row per segment. Familiar, scannable,
+    /// no surprises when the rolling tail rewrites itself.
+    case rows
+    /// Notion-style: speaker turns collapse into prose blocks with the
+    /// live tail flowing inline. Opt-in.
+    case turns
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .rows: return L10n.string("settings.transcript_layout.rows")
+        case .turns: return L10n.string("settings.transcript_layout.turns")
         }
     }
 }

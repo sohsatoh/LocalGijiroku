@@ -124,7 +124,13 @@ OSLog `.info` / `.notice` are reliably suppressed when the app is launched as a 
 - **Unconfirmed** segments live in `AppModel.liveTail: [AudioSource: TranscriptSegment]` — one slot per source, replaced wholesale on each emission. They never enter `transcript`, `pendingForSummary`, draft sessions, or the LLM pipeline.
 - **Confirmed** segments go through `TranscriptDeduper` into `transcript`. Receiving a confirmed segment for a source clears that source's `liveTail` slot so the UI doesn't show duplicate "live" content alongside the just-promoted row.
 
-The UI groups `transcript` + `liveTail` into Notion-style speaker-turn blocks via `TranscriptTurnGrouping.turns(...)`. Each turn exposes `paragraphs` — segments are split at sentence terminators (。．！？!?.) and joined with `smartConcat` (CJK runs concatenate directly; ASCII word boundaries get a single space). The UI renders each paragraph as its own Text view inside the turn block, the rolling tail flows inline as italicized secondary-color text at the end of the last paragraph, and the block itself has no card chrome — header line (speaker dot + name + source icon + time) above flowing prose. This kills the "many small rows + stale unconfirmed orphans" experience the rolling-window deduper used to produce.
+The UI has two transcript layouts, switched via Settings → General.
+
+The **rows** layout (default, matching the 9bb0828 behaviour) renders one boxed row per segment with italic / 0.55-opacity styling for unconfirmed text. The pane composes `transcript + liveTail.values` sorted by start time, so the rolling tail appears as a chronologically-placed row of its own.
+
+The opt-in **speaker turns** layout groups segments into Notion-style speaker-turn prose blocks via `TranscriptTurnGrouping.turns(...)`. Each turn exposes `paragraphs` — segments split at sentence terminators (。．！？!?.) and joined with `smartConcat` (CJK runs concatenate directly; ASCII word boundaries get a single space). The block has no card chrome — a header line (speaker dot + name + source icon + time) sits above flowing prose, and the rolling tail flows inline as italicized secondary-color text at the end of the last paragraph.
+
+Both layouts honour the user's `transcriptFontSize` setting (range 10–22 pt, default 13), applied to the body Text views.
 
 The Codable decoder defaults `isConfirmed` to `true` when missing, so sessions saved by older builds load as fully-confirmed transcripts.
 
