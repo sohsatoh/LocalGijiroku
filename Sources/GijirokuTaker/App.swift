@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct GijirokuTakerApp: App {
@@ -94,6 +95,66 @@ struct GijirokuTakerApp: App {
 
         Settings {
             SettingsView()
+        }
+
+        // Menu-bar control that surfaces only while a recording is in flight.
+        // Lets the user stop / pause without bringing the main window forward
+        // — meeting use cases want the app out of the way while notes,
+        // slides, etc. take focus.
+        MenuBarExtra(
+            isInserted: Binding(
+                get: { appModel.isRecording },
+                // The flag is driven by AppModel state, not user-toggleable
+                // from here. macOS still calls the setter when the menu is
+                // dismissed; ignore it.
+                set: { _ in }
+            )
+        ) {
+            MenuBarRecordingControls(appModel: appModel, openWindow: openWindow)
+        } label: {
+            // SF Symbols: pause.circle.fill while paused, record.circle.fill
+            // while live. macOS tints the menu-bar icon based on the
+            // template / palette config; .red fill carries through.
+            Image(systemName: appModel.isPaused ? "pause.circle.fill" : "record.circle.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(appModel.isPaused ? .yellow : .red, .primary)
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+/// Compact control surface shown when the user clicks the menu-bar icon
+/// during a recording. Status line, pause/resume, stop, and a shortcut to
+/// bring the main app window forward.
+private struct MenuBarRecordingControls: View {
+    @ObservedObject var appModel: AppModel
+    let openWindow: OpenWindowAction
+
+    var body: some View {
+        Text(appModel.isPaused
+             ? L10n.string("menubar.paused")
+             : L10n.string("menubar.recording"))
+        Divider()
+        if appModel.isPaused {
+            Button(L10n.string("recording.resume")) {
+                appModel.resumeRecording()
+            }
+        } else {
+            Button(L10n.string("recording.pause")) {
+                appModel.pauseRecording()
+            }
+        }
+        Button(L10n.string("recording.stop")) {
+            appModel.stopRecording()
+        }
+        .keyboardShortcut(".", modifiers: [.command, .shift])
+        Divider()
+        Button(L10n.string("menubar.show_window")) {
+            // Bring the app to the foreground when the user wants to see
+            // the live transcript / summary. macOS doesn't expose a
+            // "focus the main window" intent from MenuBarExtra directly;
+            // activating the app does the job.
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 }

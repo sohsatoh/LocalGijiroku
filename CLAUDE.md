@@ -87,7 +87,9 @@ GijirokuTaker (app target)      AppModel @MainActor owns the live session
                                 Transcription: WhisperTranscription actor;
                                 SpeakerTracker (cross-window stable labels).
                                 UI: NavigationSplitView, OnboardingView,
-                                SettingsView, RecordingView, SessionDetailView.
+                                SettingsView, RecordingView, SessionDetailView,
+                                MenuBarRecordingControls (shows in
+                                the menu bar only while recording).
 
 GijirokuCLI                     headless runner for E2E pipeline tests
                                 (used during development; does not work

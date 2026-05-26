@@ -253,6 +253,11 @@
 "onboarding.show_again" = "Don't show this again";
 "onboarding.menu" = "Show tutorial";
 
+/* === Menu bar control === */
+"menubar.recording" = "Recording";
+"menubar.paused" = "Paused";
+"menubar.show_window" = "Show main window";
+
 /* === Log Viewer === */
 "log.menu" = "Show log…";
 "log.title" = "Log";

@@ -253,6 +253,11 @@
 "onboarding.show_again" = "次回以降表示しない";
 "onboarding.menu" = "チュートリアルを再表示";
 
+/* === Menu bar control === */
+"menubar.recording" = "録音中";
+"menubar.paused" = "一時停止中";
+"menubar.show_window" = "メインウィンドウを表示";
+
 /* === Log Viewer === */
 "log.menu" = "ログを表示...";
 "log.title" = "ログ";

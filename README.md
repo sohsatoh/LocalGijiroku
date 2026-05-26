@@ -21,6 +21,7 @@ A local-first meeting recorder for macOS. Records your audio, transcribes it wit
 - **Guided onboarding** that walks through permissions (mic / screen recording / notifications), LLM backend choice, and audio setup.
 - Background **model downloader** with progress + macOS notification on completion, so the first Start isn't blocked on a multi-GB pull.
 - Built-in **log viewer** (Cmd-Shift-L) for inspecting capture / transcription / LLM activity without leaving the app.
+- **Menu-bar control** that appears only while recording: pause / resume / stop without bringing the main window forward, so notes and slides stay in focus during the meeting.
 - **UI language switcher** (Japanese / English / Follow System) in Settings → General, applied live.
 
 ## Privacy
