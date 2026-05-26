@@ -61,6 +61,7 @@
 "event.kind.question" = "質問";
 "event.kind.decision" = "決定";
 "event.kind.action" = "アクション";
+"event.resolved" = "解決済み";
 
 /* === Session detail === */
 "session.title_fallback" = "セッション";

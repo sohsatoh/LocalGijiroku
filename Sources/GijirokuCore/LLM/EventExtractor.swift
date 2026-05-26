@@ -17,6 +17,11 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
     public let owner: String?
     public let dueDate: String?
     public let detectedAt: Date
+    /// True when the LLM has determined the event was resolved later in
+    /// the conversation. UI renders these with a strikethrough so the
+    /// reader can see "this was asked / proposed but is now closed" —
+    /// we never silently drop events, we surface their state instead.
+    public let resolved: Bool
 
     public init(
         id: UUID = UUID(),
@@ -24,7 +29,8 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         text: String,
         owner: String? = nil,
         dueDate: String? = nil,
-        detectedAt: Date = .now
+        detectedAt: Date = .now,
+        resolved: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -32,6 +38,24 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         self.owner = owner
         self.dueDate = dueDate
         self.detectedAt = detectedAt
+        self.resolved = resolved
+    }
+
+    /// Custom decoder so MeetingEvent JSON saved before `resolved` existed
+    /// still loads cleanly — missing field defaults to false.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.kind = try c.decode(Kind.self, forKey: .kind)
+        self.text = try c.decode(String.self, forKey: .text)
+        self.owner = try? c.decode(String.self, forKey: .owner)
+        self.dueDate = try? c.decode(String.self, forKey: .dueDate)
+        self.detectedAt = try c.decode(Date.self, forKey: .detectedAt)
+        self.resolved = (try? c.decode(Bool.self, forKey: .resolved)) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, text, owner, dueDate, detectedAt, resolved
     }
 }
 
@@ -71,6 +95,7 @@ public actor EventExtractor {
                             "text": ["type": "string"],
                             "owner": ["type": ["string", "null"]],
                             "due": ["type": ["string", "null"]],
+                            "resolved": ["type": "boolean"],
                         ],
                         "required": ["kind", "text"],
                     ],
@@ -128,7 +153,8 @@ public actor EventExtractor {
                 kind: kind,
                 text: dto.text,
                 owner: (dto.owner?.isEmpty == false) ? dto.owner : nil,
-                dueDate: (dto.due?.isEmpty == false) ? dto.due : nil
+                dueDate: (dto.due?.isEmpty == false) ? dto.due : nil,
+                resolved: dto.resolved
             )
         }
     }
@@ -178,7 +204,7 @@ enum EventPrompt {
 
         REQUIRED top-level shape — never omit the outer envelope, never return
         a bare event object, never return a bare array:
-        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?}]}
+        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?,"resolved":boolean}]}
 
         Kind definitions — be strict, do not guess:
         - topic: a discussion subject newly raised that has NOT yet become a
@@ -202,6 +228,10 @@ enum EventPrompt {
         - Transcript lines look like `[SpeakerLabel] ...` — when a speaker
           is mentioned alongside a decision / action / question, attribute
           it with `owner: "<speaker>"` for actions. Don't fabricate owners.
+        - resolved: set to true when a question got an answer in the same
+          fragment, or a topic / action was clearly closed off ("これは
+          見送りで", "じゃあやめます", "解決しました" etc.). Default false.
+          Decisions are reported as resolved=true when restated/confirmed.
         - Use the same language as the transcript.
         - Even with a single event, wrap it: {"events":[ {…} ]}.
         - If nothing qualifies, return {"events":[]}.\(extra)

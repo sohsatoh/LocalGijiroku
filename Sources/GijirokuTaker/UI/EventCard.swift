@@ -52,13 +52,22 @@ struct EventCard: View {
                     .font(.body)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                if event.owner != nil || event.dueDate != nil {
+                    // Resolved events stay in the list but are visually
+                    // muted with a strikethrough so the reader sees "this
+                    // was raised but is now closed" rather than us silently
+                    // dropping history.
+                    .strikethrough(event.resolved, color: .secondary)
+                    .foregroundStyle(event.resolved ? Color.secondary : Color.primary)
+                if event.owner != nil || event.dueDate != nil || event.resolved {
                     HStack(spacing: 6) {
                         if let owner = event.owner {
                             metaPill(symbol: "person.fill", text: owner)
                         }
                         if let due = event.dueDate {
                             metaPill(symbol: "calendar", text: due)
+                        }
+                        if event.resolved {
+                            metaPill(symbol: "checkmark", text: L10n.string("event.resolved"))
                         }
                     }
                 }
@@ -69,7 +78,7 @@ struct EventCard: View {
         .padding(.horizontal, 10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(EventKindStyle.tint(event.kind).opacity(0.08))
+                .fill(EventKindStyle.tint(event.kind).opacity(event.resolved ? 0.04 : 0.08))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)

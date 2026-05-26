@@ -42,7 +42,10 @@ public struct EventMerger {
 
     /// Merges `incoming` into `current`, keeping the original `id` /
     /// `detectedAt` (so the UI ordering is stable) but adopting newly-known
-    /// owner / due fields and the longer / more recent text.
+    /// owner / due fields, the longer / more recent text, and any
+    /// resolved=true status the LLM has assigned. Once an event is marked
+    /// resolved it stays resolved — later re-emissions can't accidentally
+    /// re-open it.
     static func merged(into current: MeetingEvent, from incoming: MeetingEvent) -> MeetingEvent {
         let text: String = {
             if incoming.text.count >= current.text.count { return incoming.text }
@@ -54,7 +57,8 @@ public struct EventMerger {
             text: text,
             owner: incoming.owner ?? current.owner,
             dueDate: incoming.dueDate ?? current.dueDate,
-            detectedAt: current.detectedAt
+            detectedAt: current.detectedAt,
+            resolved: current.resolved || incoming.resolved
         )
     }
 

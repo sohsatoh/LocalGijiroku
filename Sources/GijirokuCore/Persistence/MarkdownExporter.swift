@@ -103,7 +103,11 @@ public enum MarkdownExporter {
             let prefix = includeKind ? "[\(ev.kind.rawValue)] " : ""
             let owner = ev.owner.map { " (@\($0))" } ?? ""
             let due = ev.dueDate.map { " — due \($0)" } ?? ""
-            return "- \(prefix)\(ev.text)\(owner)\(due)"
+            // Resolved items render with ~strikethrough~ markdown so the
+            // exported note matches what the user sees in-app.
+            let body = ev.resolved ? "~~\(ev.text)~~" : ev.text
+            let suffix = ev.resolved ? " ✓" : ""
+            return "- \(prefix)\(body)\(owner)\(due)\(suffix)"
         }.joined(separator: "\n")
     }
 

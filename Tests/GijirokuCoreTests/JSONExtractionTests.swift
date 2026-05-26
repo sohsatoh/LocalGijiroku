@@ -180,6 +180,32 @@ import Foundation
     #expect(events[0].dueDate == "Fri")
 }
 
+@Test func eventExtractorReadsResolvedFlag() throws {
+    let input = #"""
+    {"events":[
+      {"kind":"question","text":"いつまで?","resolved":true},
+      {"kind":"action","text":"do thing"}
+    ]}
+    """#
+    let events = try EventExtractor.parse(response: input)
+    #expect(events.count == 2)
+    #expect(events[0].resolved == true)
+    #expect(events[1].resolved == false)
+}
+
+@Test func meetingEventDecodesLegacyJSONWithoutResolvedField() throws {
+    // Older session files don't have a `resolved` key. Decoder must default
+    // to false so the file loads cleanly.
+    let legacy = """
+    {"id":"00000000-0000-0000-0000-000000000001","kind":"question","text":"why?","detectedAt":"2026-01-01T00:00:00Z"}
+    """.data(using: .utf8)!
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let event = try decoder.decode(MeetingEvent.self, from: legacy)
+    #expect(event.resolved == false)
+    #expect(event.text == "why?")
+}
+
 @Test func summaryEngineAcceptsTopLevelArray() throws {
     let input = """
     [

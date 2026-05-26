@@ -61,6 +61,7 @@
 "event.kind.question" = "Question";
 "event.kind.decision" = "Decision";
 "event.kind.action" = "Action";
+"event.resolved" = "Resolved";
 
 /* === Session detail === */
 "session.title_fallback" = "Session";
