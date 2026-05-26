@@ -75,36 +75,57 @@ struct LibrarySidebar: View {
 
     private var recordingHeader: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
+            HStack(spacing: 6) {
+                Button {
+                    if appModel.isRecording {
+                        appModel.stopRecording()
+                    } else {
+                        appModel.startRecording()
+                        library.selection = [.live]
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: appModel.isRecording ? "stop.circle.fill" : "record.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(appModel.isRecording ? Color.secondary : Color.red)
+                        Text(loc: appModel.isRecording ? "recording.stop" : "recording.start")
+                            .font(.headline)
+                        Spacer()
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("r", modifiers: [.command])
+
+                // Pause / Resume sits next to Stop while recording. Cmd-P
+                // toggles. Hidden when not recording.
                 if appModel.isRecording {
-                    appModel.stopRecording()
-                } else {
-                    appModel.startRecording()
-                    library.selection = [.live]
+                    Button {
+                        if appModel.isPaused {
+                            appModel.resumeRecording()
+                        } else {
+                            appModel.pauseRecording()
+                        }
+                    } label: {
+                        Image(systemName: appModel.isPaused ? "play.circle.fill" : "pause.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(appModel.isPaused ? .green : .orange)
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.string(appModel.isPaused ? "recording.resume" : "recording.pause"))
+                    .keyboardShortcut("p", modifiers: [.command])
                 }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: appModel.isRecording ? "stop.circle.fill" : "record.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(appModel.isRecording ? Color.secondary : Color.red)
-                    Text(loc: appModel.isRecording ? "recording.stop" : "recording.start")
-                        .font(.headline)
-                    Spacer()
-                }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(NSColor.controlBackgroundColor))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)
-                )
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut("r", modifiers: [.command])
 
             if appModel.summaryProgress.isBusy || appModel.isRecording {
                 if appModel.summaryProgress.isBusy {

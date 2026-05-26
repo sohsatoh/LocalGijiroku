@@ -1,7 +1,10 @@
 /* === Recording controls === */
 "recording.start" = "Record";
 "recording.stop" = "Stop";
+"recording.pause" = "Pause";
+"recording.resume" = "Resume";
 "recording.in_progress" = "Recording";
+"recording.paused" = "Paused";
 "recording.in_progress_screen" = "Live recording";
 "recording.regenerate_summary" = "Re-summarize";
 "recording.regenerate_summary.help" = "Send the entire transcript back through the LLM to regenerate summary and events";
@@ -144,6 +147,7 @@
 "status.starting_audio" = "Starting audio capture...";
 "status.loading_model" = "Loading model... (first run may take a while)";
 "status.recording" = "Recording...";
+"status.paused" = "Paused";
 "status.saving" = "Saving...";
 "status.saved_format" = "Saved %@";
 "status.capture_error_format" = "Capture error: %@";

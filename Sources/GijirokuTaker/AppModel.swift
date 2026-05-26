@@ -9,6 +9,10 @@ final class AppModel: ObservableObject {
     private let logger = Logger(subsystem: "com.gijirokutaker.app", category: "AppModel")
 
     @Published var isRecording: Bool = false
+    /// True while recording is paused (audio engines stopped but session
+    /// state — transcript, summary, events, sessionId — is preserved).
+    /// `isRecording` stays true in this state; only `isPaused` differentiates.
+    @Published var isPaused: Bool = false
     @Published var transcript: [TranscriptSegment] = []
     @Published var summary: CumulativeSummary = CumulativeSummary()
     @Published var events: [MeetingEvent] = []
@@ -170,6 +174,7 @@ final class AppModel: ObservableObject {
     func stopRecording() {
         guard isRecording else { return }
         isRecording = false
+        isPaused = false
         summaryLoopTask?.cancel()
         summaryLoopTask = nil
         audioPumpTask?.cancel()
@@ -184,6 +189,39 @@ final class AppModel: ObservableObject {
         systemWaveform = WaveformChannelState()
         statusMessage = L10n.string("status.saving")
         Task { await self.persistFinalSession() }
+    }
+
+    /// Pause an in-flight recording. Tears down the audio engines and
+    /// summary loop but keeps every accumulated piece of session state
+    /// (transcript, summary, events, sessionId, sessionStartedAt). Resume
+    /// brings the pipeline back up against the same session.
+    func pauseRecording() {
+        guard isRecording, !isPaused else { return }
+        isPaused = true
+        summaryLoopTask?.cancel()
+        summaryLoopTask = nil
+        audioPumpTask?.cancel()
+        audioPumpTask = nil
+        waveformTask?.cancel()
+        waveformTask = nil
+        Task { [captureEngine] in await captureEngine?.stop() }
+        captureEngine = nil
+        micWaveform = WaveformChannelState()
+        systemWaveform = WaveformChannelState()
+        statusMessage = L10n.string("status.paused")
+        fputs("[GijirokuTaker] paused\n", stderr)
+    }
+
+    /// Resume a paused recording. Re-creates the audio engines + summary
+    /// loop using the original session's transcription/LLM engines; any
+    /// audio captured during the pause is naturally absent from transcript.
+    func resumeRecording() {
+        guard isRecording, isPaused else { return }
+        isPaused = false
+        statusMessage = L10n.string("status.recording")
+        startSummaryLoop()
+        startAudioPipeline()
+        fputs("[GijirokuTaker] resumed\n", stderr)
     }
 
     func append(segment: TranscriptSegment) {

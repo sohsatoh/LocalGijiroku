@@ -1,7 +1,10 @@
 /* === Recording controls === */
 "recording.start" = "録音開始";
 "recording.stop" = "停止";
+"recording.pause" = "一時停止";
+"recording.resume" = "再開";
 "recording.in_progress" = "録音中";
+"recording.paused" = "一時停止中";
 "recording.in_progress_screen" = "ライブ録音";
 "recording.regenerate_summary" = "再サマリ";
 "recording.regenerate_summary.help" = "これまでの transcript 全体を LLM に投げ直してサマリ/イベントを再生成";
@@ -144,6 +147,7 @@
 "status.starting_audio" = "オーディオキャプチャ起動中...";
 "status.loading_model" = "モデル読み込み中... (初回は時間がかかります)";
 "status.recording" = "録音中...";
+"status.paused" = "一時停止中";
 "status.saving" = "保存中...";
 "status.saved_format" = "保存完了 %@";
 "status.capture_error_format" = "キャプチャエラー: %@";
