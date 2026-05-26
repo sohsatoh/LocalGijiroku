@@ -13,6 +13,29 @@ struct GijirokuTakerApp: App {
         // user opens the Log Viewer.
         LogStore.shared.installStderrCapture()
         Self.migrateDeprecatedSettings()
+        Self.warmUpWhisper()
+    }
+
+    /// Kick off WhisperKit model loading in the background so the first
+    /// recording doesn't pay the 15–20 s cold-load cost (which previously
+    /// surfaced as "no transcript for the first 30 seconds"). The model is
+    /// cached at module level by `WhisperModelCache` and reused across all
+    /// sessions with the same config.
+    private static func warmUpWhisper() {
+        let modelName = SettingsModel.shared.whisperModel
+        let vadEnabled = SettingsModel.shared.vadEnabled
+        Task.detached(priority: .utility) {
+            do {
+                _ = try await WhisperModelCache.shared.loadModel(
+                    name: modelName,
+                    vadEnabled: vadEnabled,
+                    vadEnergyThreshold: 0.02
+                )
+                fputs("[GijirokuTakerApp] Whisper preload finished model=\(modelName)\n", stderr)
+            } catch {
+                fputs("[GijirokuTakerApp] Whisper preload failed: \(error.localizedDescription)\n", stderr)
+            }
+        }
     }
 
     /// One-shot rewrite of UserDefaults entries that point to MLX models we

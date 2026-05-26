@@ -7,6 +7,85 @@ import SpeakerKit
 // WhisperKit also defines a public `AudioChunk` struct that collides with
 // GijirokuCore.AudioChunk. We refer to ours by module-qualified name throughout
 // this file to avoid ambiguity.
+
+/// Module-level cache for loaded WhisperKit instances. The cold-load cost for
+/// large-v3 (download check + weight read + Metal kernel compilation) is
+/// 15–20 s. Without a cache, every `startRecording` creates a fresh
+/// `WhisperTranscription` actor and pays that cost again, which surfaces as
+/// the user's "first 30 seconds of audio have no transcript" complaint.
+///
+/// Keying includes the VAD config because the VAD is wired into the
+/// `WhisperKitConfig` at init time; changing it requires a re-init. Two
+/// sessions with the same model + VAD setup will share one underlying
+/// WhisperKit instance.
+///
+/// We need `@unchecked Sendable` because WhisperKit itself isn't Sendable —
+/// we serialize access via NSLock and the in-flight Task map, and the
+/// existing `WhisperTranscription` actor already crosses this boundary by
+/// holding a `WhisperKit?` property of its own.
+/// `WhisperKit` doesn't conform to Sendable so it can't cross actor / Task
+/// boundaries on its own. We wrap it in a box that opts out of Sendable
+/// checking — synchronization is provided by the cache's `NSLock` and by the
+/// fact that we never mutate the `kit` after `WhisperKit.init` returns.
+struct WhisperKitBox: @unchecked Sendable {
+    let kit: WhisperKit
+}
+
+final class WhisperModelCache: @unchecked Sendable {
+    static let shared = WhisperModelCache()
+
+    private let lock = NSLock()
+    private var cache: [String: WhisperKitBox] = [:]
+    private var inFlight: [String: Task<WhisperKitBox, Error>] = [:]
+
+    static func cacheKey(modelName: String, vadEnabled: Bool, vadEnergyThreshold: Float) -> String {
+        "\(modelName)|vad:\(vadEnabled):\(vadEnergyThreshold)"
+    }
+
+    func loadModel(
+        name: String,
+        vadEnabled: Bool,
+        vadEnergyThreshold: Float
+    ) async throws -> WhisperKit {
+        let key = Self.cacheKey(modelName: name, vadEnabled: vadEnabled, vadEnergyThreshold: vadEnergyThreshold)
+        // De-duplicate concurrent loads — a preload Task at app launch and a
+        // startRecording call shortly after must not load the same model
+        // twice. Whichever Task got here first owns the load; the rest await
+        // its result.
+        let task = lock.withLock { () -> Task<WhisperKitBox, Error> in
+            if let cached = cache[key] {
+                return Task { cached }
+            }
+            if let pending = inFlight[key] {
+                return pending
+            }
+            let new = Task<WhisperKitBox, Error> {
+                let vad: VoiceActivityDetector? = vadEnabled
+                    ? EnergyVAD(energyThreshold: vadEnergyThreshold)
+                    : nil
+                let kit = try await WhisperKit(WhisperKitConfig(
+                    model: name,
+                    voiceActivityDetector: vad
+                ))
+                return WhisperKitBox(kit: kit)
+            }
+            inFlight[key] = new
+            return new
+        }
+        do {
+            let box = try await task.value
+            lock.withLock {
+                cache[key] = box
+                inFlight[key] = nil
+            }
+            return box.kit
+        } catch {
+            lock.withLock { inFlight[key] = nil }
+            throw error
+        }
+    }
+}
+
 public actor WhisperTranscription: TranscriptionEngine {
     public struct Config: Sendable {
         public let modelName: String
@@ -137,17 +216,13 @@ public actor WhisperTranscription: TranscriptionEngine {
     private func ensureLoaded() async throws -> WhisperKit {
         if let whisper { return whisper }
         logger.info("Loading WhisperKit model=\(self.config.modelName, privacy: .public) (downloads on first use)...")
-        // Hand WhisperKit an EnergyVAD when enabled so it can pre-segment the
-        // rolling audio window by silence — yields segment boundaries that
-        // align with speech pauses instead of Whisper's internal token
-        // heuristics. EnergyVAD is cheap and configured via energyThreshold.
-        let vad: VoiceActivityDetector? = config.vadEnabled
-            ? EnergyVAD(energyThreshold: config.vadEnergyThreshold)
-            : nil
-        let kit = try await WhisperKit(WhisperKitConfig(
-            model: config.modelName,
-            voiceActivityDetector: vad
-        ))
+        // Delegate to the module-level cache so a second session with the
+        // same config reuses the already-loaded WhisperKit instance.
+        let kit = try await WhisperModelCache.shared.loadModel(
+            name: config.modelName,
+            vadEnabled: config.vadEnabled,
+            vadEnergyThreshold: config.vadEnergyThreshold
+        )
         whisper = kit
         if config.vadEnabled {
             fputs("[WhisperTranscription] VAD enabled (energyThreshold=\(config.vadEnergyThreshold))\n", stderr)
@@ -156,6 +231,13 @@ public actor WhisperTranscription: TranscriptionEngine {
         }
         logger.info("WhisperKit loaded.")
         return kit
+    }
+
+    /// Eagerly load the WhisperKit model so the cold-load cost is paid
+    /// before the first recording starts. Safe to call any time — the
+    /// underlying cache deduplicates concurrent loads.
+    public func preload() async throws {
+        _ = try await ensureLoaded()
     }
 
     /// Lazily loads SpeakerKit. Returns nil (with a logged error) if loading
