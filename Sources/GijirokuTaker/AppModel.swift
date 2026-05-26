@@ -1,0 +1,213 @@
+import Foundation
+import OSLog
+import SwiftUI
+import GijirokuCore
+import GijirokuLLM
+
+@MainActor
+final class AppModel: ObservableObject {
+    private let logger = Logger(subsystem: "com.gijirokutaker.app", category: "AppModel")
+
+    @Published var isRecording: Bool = false
+    @Published var transcript: [TranscriptSegment] = []
+    @Published var summary: CumulativeSummary = CumulativeSummary()
+    @Published var events: [MeetingEvent] = []
+    @Published var statusMessage: String = "Idle"
+
+    private let settings: SettingsModel = .shared
+    private let sessionStore: FileSessionStore
+
+    // Recreated per session so that settings changes take effect on next Start.
+    private var client: (any LLMClient)?
+    private var summaryEngine: SummaryEngine?
+    private var eventExtractor: EventExtractor?
+    private var transcriptionEngine: WhisperTranscription?
+    private var captureEngine: AudioCaptureEngine?
+
+    private var pendingForSummary: [TranscriptSegment] = []
+    private var sessionId: UUID = UUID()
+    private var sessionStartedAt: Date = .now
+
+    private var summaryLoopTask: Task<Void, Never>?
+    private var audioPumpTask: Task<Void, Never>?
+
+    var summaryModelDisplay: String {
+        "\(settings.llmBackend.rawValue) / \(settings.activeLLMModelID)"
+    }
+
+    init() {
+        let appSupport = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent("GijirokuTaker/Sessions", isDirectory: true)
+        self.sessionStore = FileSessionStore(directory: dir)
+    }
+
+    func startRecording() {
+        guard !isRecording else { return }
+        isRecording = true
+        sessionId = UUID()
+        sessionStartedAt = .now
+        statusMessage = "Starting..."
+        fputs("[GijirokuTaker] startRecording backend=\(settings.llmBackend.rawValue)\n", stderr)
+
+        // Build per-session engines from current settings so that changes apply
+        // without restarting the app.
+        let llm: any LLMClient
+        switch settings.llmBackend {
+        case .ollama:
+            let llmBaseURL = URL(string: settings.ollamaBaseURL) ?? URL(string: "http://127.0.0.1:11434")!
+            llm = OllamaClient(baseURL: llmBaseURL)
+            fputs("[GijirokuTaker] Ollama client created baseURL=\(llmBaseURL)\n", stderr)
+        case .mlx:
+            llm = MLXClient { [weak self] progress in
+                Task { @MainActor in
+                    self?.statusMessage = "Loading LLM... \(Int(progress.fraction * 100))%"
+                }
+            }
+            fputs("[GijirokuTaker] MLX client created\n", stderr)
+        }
+        self.client = llm
+
+        let llmModelID = settings.activeLLMModelID
+        let summaryConfig = SummaryEngine.Config(
+            model: llmModelID,
+            language: settings.whisperLanguage == "auto" ? "auto" : (settings.whisperLanguage == "ja" ? "Japanese" : "English")
+        )
+        let summaryEngine = SummaryEngine(client: llm, config: summaryConfig)
+        self.summaryEngine = summaryEngine
+
+        let eventExtractor = EventExtractor(client: llm, config: .init(model: llmModelID))
+        self.eventExtractor = eventExtractor
+
+        let language = settings.whisperLanguage
+        let whisperLang = (language == "auto") ? nil : language
+        let transcription = WhisperTranscription(
+            config: .init(
+                modelName: settings.whisperModel,
+                language: whisperLang ?? "ja"
+            )
+        )
+        self.transcriptionEngine = transcription
+
+        transcript.removeAll()
+        summary = CumulativeSummary()
+        events.removeAll()
+        pendingForSummary.removeAll()
+
+        startSummaryLoop()
+        startAudioPipeline()
+    }
+
+    func stopRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        summaryLoopTask?.cancel()
+        summaryLoopTask = nil
+        audioPumpTask?.cancel()
+        audioPumpTask = nil
+        Task { [captureEngine] in await captureEngine?.stop() }
+        captureEngine = nil
+        statusMessage = "Saving..."
+        Task { await self.persistFinalSession() }
+    }
+
+    func append(segment: TranscriptSegment) {
+        transcript.append(segment)
+        // MVP: Whisper はまだ isFinal を区別していないので全部要約対象に積む。
+        pendingForSummary.append(segment)
+    }
+
+    private func startSummaryLoop() {
+        let interval = settings.summaryUpdateInterval
+        summaryLoopTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                if Task.isCancelled { break }
+                await self?.flushSummaryWindow()
+            }
+        }
+    }
+
+    private func flushSummaryWindow() async {
+        let segments = pendingForSummary
+        pendingForSummary.removeAll()
+        fputs("[GijirokuTaker] flushSummaryWindow segments=\(segments.count)\n", stderr)
+        guard !segments.isEmpty else {
+            logger.info("flushSummaryWindow: no pending segments")
+            return
+        }
+        guard let summaryEngine, let eventExtractor else {
+            fputs("[GijirokuTaker] flushSummaryWindow: summaryEngine or eventExtractor is nil\n", stderr)
+            return
+        }
+        fputs("[GijirokuTaker] flushSummaryWindow: invoking ingest()\n", stderr)
+        logger.info("flushSummaryWindow: requesting summary for \(segments.count, privacy: .public) segments")
+        statusMessage = "Summarizing..."
+        do {
+            async let summaryResult = summaryEngine.ingest(newSegments: segments)
+            async let eventsResult = eventExtractor.extract(from: segments)
+            let (updatedSummary, newEvents) = try await (summaryResult, eventsResult)
+            summary = updatedSummary
+            events.append(contentsOf: newEvents)
+            logger.info("flushSummaryWindow: sections=\(updatedSummary.sections.count, privacy: .public) events=\(newEvents.count, privacy: .public)")
+            statusMessage = "Recording..."
+        } catch {
+            logger.error("Summary error: \(error.localizedDescription, privacy: .public)")
+            statusMessage = "Summary error: \(error.localizedDescription)"
+        }
+    }
+
+    private func startAudioPipeline() {
+        let preferredUID = settings.preferredInputDeviceUID.isEmpty ? nil : settings.preferredInputDeviceUID
+        let engine = AudioCaptureEngine(config: .init(
+            captureSystem: settings.captureSystemAudio,
+            captureMicrophone: settings.captureMicrophone,
+            preferredInputDeviceUID: preferredUID
+        ))
+        captureEngine = engine
+        guard let transcriber = transcriptionEngine else { return }
+
+        audioPumpTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                self.statusMessage = "Starting audio capture..."
+                let audioStream = try await engine.start()
+                self.statusMessage = "Loading model... (first run may take a while)"
+                let segmentStream = transcriber.transcribe(audioStream)
+                self.statusMessage = "Recording..."
+                for await segment in segmentStream {
+                    self.append(segment: segment)
+                    if Task.isCancelled { break }
+                }
+            } catch {
+                self.statusMessage = "Capture error: \(error.localizedDescription)"
+                self.logger.error("Capture error: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func persistFinalSession() async {
+        await flushSummaryWindow()
+        let session = Session(
+            id: sessionId,
+            title: defaultTitle(),
+            startedAt: sessionStartedAt,
+            endedAt: .now,
+            transcript: transcript,
+            summary: summary,
+            events: events
+        )
+        do {
+            try sessionStore.save(session)
+            statusMessage = "Saved \(session.id.uuidString.prefix(8))"
+        } catch {
+            statusMessage = "Save error: \(error.localizedDescription)"
+        }
+    }
+
+    private func defaultTitle() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return "Meeting \(formatter.string(from: sessionStartedAt))"
+    }
+}

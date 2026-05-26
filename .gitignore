@@ -1,0 +1,23 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+xcode-build/
+build/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+Package.resolved
+*.xcuserstate
+
+# Local session recordings (sensitive)
+Recordings/
+*.wav
+*.m4a
+*.json.session
+
+# Local models
+Models/
+
+# Local config
+.env
+.env.local
