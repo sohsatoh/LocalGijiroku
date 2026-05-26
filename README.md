@@ -1,5 +1,7 @@
 # LocalGijiroku
 
+English | [日本語](./README.ja.md)
+
 A local-first meeting recorder for macOS. Records your audio, transcribes it with WhisperKit on-device, and produces rolling LLM summaries plus extracted decisions, actions, and questions — all without a single byte leaving the machine.
 
 ## What it does
