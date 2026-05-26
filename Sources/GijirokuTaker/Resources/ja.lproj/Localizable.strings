@@ -13,6 +13,8 @@
 "recording.diarization_analyzing" = "話者分離: 解析中…";
 "recording.diarization_count_format" = "話者分離: %d 名検出";
 "recording.diarization_help" = "Pyannote (SpeakerKit) で各 transcript セグメントに speaker ラベルを付けています。検出数は字幕にラベルが付いた話者の累計です。";
+"recording.toggle_mic" = "マイクの取り込みを切替 (録音中も変更可)";
+"recording.toggle_system" = "システム音声の取り込みを切替 (録音中も変更可)";
 
 /* === Sidebar === */
 "sidebar.unfiled" = "未分類";

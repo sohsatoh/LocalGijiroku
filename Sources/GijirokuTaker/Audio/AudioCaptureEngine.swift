@@ -38,6 +38,10 @@ public actor AudioCaptureEngine {
     private var micBuilder: AudioChunkBuilder?
     private var continuation: AsyncStream<AudioChunk>.Continuation?
     private var waveformContinuations: [UUID: AsyncStream<AudioChunk>.Continuation] = [:]
+    /// The chunk-multicasting closure used by capture sources. We hold onto
+    /// it so live-toggle calls (setSystemEnabled/setMicEnabled) can wire it
+    /// into newly-started sources without reaching back into start().
+    private var multicast: (@Sendable (AudioChunk) -> Void)?
 
     public init(config: Config = .init()) {
         self.config = config
@@ -56,6 +60,7 @@ public actor AudioCaptureEngine {
             guard let self else { return }
             Task { await self.broadcastToWaveformSubscribers(chunk) }
         }
+        self.multicast = multicast
 
         // Each capture source is started in isolation; one failing (e.g. system
         // audio without screen-recording permission) must not block the other.
@@ -120,6 +125,69 @@ public actor AudioCaptureEngine {
     private func broadcastToWaveformSubscribers(_ chunk: AudioChunk) {
         for cont in waveformContinuations.values {
             cont.yield(chunk)
+        }
+    }
+
+    /// Whether the system-audio capture is actively running right now.
+    /// Distinct from `config.captureSystem` (the at-start preference) —
+    /// reflects the live state after any toggle calls.
+    public var systemIsActive: Bool { systemCapture != nil }
+    public var micIsActive: Bool { micCapture != nil }
+
+    /// Start/stop the system-audio source mid-recording. No-op if already
+    /// in the target state. Failures (e.g. screen-recording permission
+    /// missing on first toggle-on) are logged and leave the source off.
+    public func setSystemEnabled(_ enabled: Bool) async {
+        if enabled {
+            guard systemCapture == nil else { return }
+            guard let multicast else { return }
+            let capture = SystemAudioCapture()
+            let builder = AudioChunkBuilder(
+                source: .system,
+                targetSampleRate: config.targetSampleRate,
+                chunkDuration: config.chunkDuration,
+                onChunk: multicast
+            )
+            do {
+                try await capture.start { buffer in
+                    builder.ingest(buffer)
+                }
+                systemBuilder = builder
+                systemCapture = capture
+            } catch {
+                Self.logger.error("setSystemEnabled(true) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        } else {
+            systemCapture?.stop()
+            systemCapture = nil
+            systemBuilder = nil
+        }
+    }
+
+    public func setMicEnabled(_ enabled: Bool) async {
+        if enabled {
+            guard micCapture == nil else { return }
+            guard let multicast else { return }
+            let mic = MicrophoneCapture()
+            let builder = AudioChunkBuilder(
+                source: .microphone,
+                targetSampleRate: config.targetSampleRate,
+                chunkDuration: config.chunkDuration,
+                onChunk: multicast
+            )
+            do {
+                try mic.start(preferredDeviceUID: config.preferredInputDeviceUID) { buffer in
+                    builder.ingest(buffer)
+                }
+                micBuilder = builder
+                micCapture = mic
+            } catch {
+                Self.logger.error("setMicEnabled(true) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        } else {
+            micCapture?.stop()
+            micCapture = nil
+            micBuilder = nil
         }
     }
 

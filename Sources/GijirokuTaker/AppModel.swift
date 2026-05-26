@@ -224,6 +224,21 @@ final class AppModel: ObservableObject {
         fputs("[GijirokuTaker] resumed\n", stderr)
     }
 
+    /// Live-toggle the system-audio source mid-recording. Reflects the
+    /// change into SettingsModel so the next session picks it up too.
+    /// No-op while paused — the engine is torn down then.
+    func setSystemCaptureEnabled(_ enabled: Bool) {
+        settings.captureSystemAudio = enabled
+        guard isRecording, !isPaused, let captureEngine else { return }
+        Task { await captureEngine.setSystemEnabled(enabled) }
+    }
+
+    func setMicCaptureEnabled(_ enabled: Bool) {
+        settings.captureMicrophone = enabled
+        guard isRecording, !isPaused, let captureEngine else { return }
+        Task { await captureEngine.setMicEnabled(enabled) }
+    }
+
     func append(segment: TranscriptSegment) {
         let outcome = transcriptDeduper.merge(segment, into: &transcript)
         switch outcome {

@@ -13,6 +13,8 @@
 "recording.diarization_analyzing" = "Diarization: analyzing…";
 "recording.diarization_count_format" = "Diarization: %d speaker(s)";
 "recording.diarization_help" = "Pyannote (SpeakerKit) tags each transcript segment with a speaker label. The count reflects distinct speakers that have appeared in the transcript so far.";
+"recording.toggle_mic" = "Toggle microphone capture (works during recording)";
+"recording.toggle_system" = "Toggle system audio capture (works during recording)";
 
 /* === Sidebar === */
 "sidebar.unfiled" = "Unfiled";
