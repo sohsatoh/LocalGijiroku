@@ -193,6 +193,20 @@ import Foundation
     #expect(events[1].resolved == false)
 }
 
+@Test func eventExtractorReadsResolutionText() throws {
+    let input = #"""
+    {"events":[
+      {"kind":"question","text":"いつまで?","resolved":true,"resolution":"来週金曜まで"},
+      {"kind":"topic","text":"価格設定","resolved":true,"answer":"現状維持で続行"}
+    ]}
+    """#
+    let events = try EventExtractor.parse(response: input)
+    #expect(events.count == 2)
+    #expect(events[0].resolution == "来週金曜まで")
+    // Alt key name "answer" is also accepted by the coercer.
+    #expect(events[1].resolution == "現状維持で続行")
+}
+
 @Test func meetingEventDecodesLegacyJSONWithoutResolvedField() throws {
     // Older session files don't have a `resolved` key. Decoder must default
     // to false so the file loads cleanly.

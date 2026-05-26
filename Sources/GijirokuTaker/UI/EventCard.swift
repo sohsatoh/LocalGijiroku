@@ -58,6 +58,21 @@ struct EventCard: View {
                     // dropping history.
                     .strikethrough(event.resolved, color: .secondary)
                     .foregroundStyle(event.resolved ? Color.secondary : Color.primary)
+                // Resolution text — only present when the LLM had an
+                // explicit answer / outcome. Indented + tinted to read
+                // as "this is the response to the line above".
+                if let resolution = event.resolution, !resolution.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.caption2)
+                            .foregroundStyle(EventKindStyle.tint(event.kind).opacity(0.7))
+                        Text(resolution)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 if event.owner != nil || event.dueDate != nil || event.resolved {
                     HStack(spacing: 6) {
                         if let owner = event.owner {

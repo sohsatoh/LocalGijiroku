@@ -51,6 +51,10 @@ public struct EventMerger {
             if incoming.text.count >= current.text.count { return incoming.text }
             return current.text
         }()
+        // Resolution: take the latest non-empty one. If a later turn
+        // refines the answer ("by Friday" → "by Friday EOD"), we want
+        // the refinement to win.
+        let resolution = incoming.resolution ?? current.resolution
         return MeetingEvent(
             id: current.id,
             kind: current.kind,
@@ -58,7 +62,8 @@ public struct EventMerger {
             owner: incoming.owner ?? current.owner,
             dueDate: incoming.dueDate ?? current.dueDate,
             detectedAt: current.detectedAt,
-            resolved: current.resolved || incoming.resolved
+            resolved: current.resolved || incoming.resolved,
+            resolution: resolution
         )
     }
 

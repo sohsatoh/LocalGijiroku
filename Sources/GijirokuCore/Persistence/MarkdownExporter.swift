@@ -107,7 +107,16 @@ public enum MarkdownExporter {
             // exported note matches what the user sees in-app.
             let body = ev.resolved ? "~~\(ev.text)~~" : ev.text
             let suffix = ev.resolved ? " ✓" : ""
-            return "- \(prefix)\(body)\(owner)\(due)\(suffix)"
+            // Indented "→ answer" line under the question / topic so the
+            // resolution stays visually attached to its event in the
+            // exported markdown.
+            let resolutionLine: String
+            if let r = ev.resolution, !r.isEmpty {
+                resolutionLine = "\n  → \(r)"
+            } else {
+                resolutionLine = ""
+            }
+            return "- \(prefix)\(body)\(owner)\(due)\(suffix)\(resolutionLine)"
         }.joined(separator: "\n")
     }
 

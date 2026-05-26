@@ -22,6 +22,10 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
     /// reader can see "this was asked / proposed but is now closed" —
     /// we never silently drop events, we surface their state instead.
     public let resolved: Bool
+    /// One-line summary of HOW the event was resolved (the answer to a
+    /// question, the conclusion of a topic, the outcome of an action).
+    /// Only meaningful when `resolved` is true; nil otherwise.
+    public let resolution: String?
 
     public init(
         id: UUID = UUID(),
@@ -30,7 +34,8 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         owner: String? = nil,
         dueDate: String? = nil,
         detectedAt: Date = .now,
-        resolved: Bool = false
+        resolved: Bool = false,
+        resolution: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -39,10 +44,12 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         self.dueDate = dueDate
         self.detectedAt = detectedAt
         self.resolved = resolved
+        self.resolution = resolution
     }
 
-    /// Custom decoder so MeetingEvent JSON saved before `resolved` existed
-    /// still loads cleanly — missing field defaults to false.
+    /// Custom decoder so MeetingEvent JSON saved before `resolved` /
+    /// `resolution` existed still loads cleanly — missing fields default
+    /// to false / nil.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
@@ -52,10 +59,11 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
         self.dueDate = try? c.decode(String.self, forKey: .dueDate)
         self.detectedAt = try c.decode(Date.self, forKey: .detectedAt)
         self.resolved = (try? c.decode(Bool.self, forKey: .resolved)) ?? false
+        self.resolution = try? c.decode(String.self, forKey: .resolution)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, text, owner, dueDate, detectedAt, resolved
+        case id, kind, text, owner, dueDate, detectedAt, resolved, resolution
     }
 }
 
@@ -96,6 +104,7 @@ public actor EventExtractor {
                             "owner": ["type": ["string", "null"]],
                             "due": ["type": ["string", "null"]],
                             "resolved": ["type": "boolean"],
+                            "resolution": ["type": ["string", "null"]],
                         ],
                         "required": ["kind", "text"],
                     ],
@@ -154,7 +163,8 @@ public actor EventExtractor {
                 text: dto.text,
                 owner: (dto.owner?.isEmpty == false) ? dto.owner : nil,
                 dueDate: (dto.due?.isEmpty == false) ? dto.due : nil,
-                resolved: dto.resolved
+                resolved: dto.resolved,
+                resolution: (dto.resolution?.isEmpty == false) ? dto.resolution : nil
             )
         }
     }
@@ -204,7 +214,7 @@ enum EventPrompt {
 
         REQUIRED top-level shape — never omit the outer envelope, never return
         a bare event object, never return a bare array:
-        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?,"resolved":boolean}]}
+        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?,"resolved":boolean,"resolution":string?}]}
 
         Kind definitions — be strict, do not guess:
         - topic: a discussion subject newly raised that has NOT yet become a
@@ -232,6 +242,12 @@ enum EventPrompt {
           fragment, or a topic / action was clearly closed off ("これは
           見送りで", "じゃあやめます", "解決しました" etc.). Default false.
           Decisions are reported as resolved=true when restated/confirmed.
+        - resolution: when resolved=true, fill with a ≤20-word summary of
+          HOW it was resolved (the answer to a question, the outcome of a
+          topic / action). Omit / null when resolved=false. Examples:
+            question "いつまで?" → resolution "来週金曜まで"
+            topic "価格設定" → resolution "現状維持で続行"
+            action "提案書をまとめる" → resolution "完了、田中が送付"
         - Use the same language as the transcript.
         - Even with a single event, wrap it: {"events":[ {…} ]}.
         - If nothing qualifies, return {"events":[]}.\(extra)

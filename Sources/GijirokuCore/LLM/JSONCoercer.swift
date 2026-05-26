@@ -24,6 +24,7 @@ public enum JSONCoercer {
         public let owner: String?
         public let due: String?
         public let resolved: Bool
+        public let resolution: String?
     }
 
     /// Coerce any JSON tree into `[SectionDTO]`. Accepts:
@@ -56,7 +57,11 @@ public enum JSONCoercer {
             let owner = firstString(of: ["owner", "assignee", "responsible", "person"], in: dict)
             let due = firstString(of: ["due", "dueDate", "deadline", "by"], in: dict)
             let resolved = firstBool(of: ["resolved", "closed", "done", "answered"], in: dict) ?? false
-            out.append(.init(kind: kindRaw, text: text, owner: owner, due: due, resolved: resolved))
+            let resolution = firstString(of: ["resolution", "answer", "outcome", "conclusion"], in: dict)
+            out.append(.init(
+                kind: kindRaw, text: text, owner: owner, due: due,
+                resolved: resolved, resolution: resolution
+            ))
         }
         return out
     }
