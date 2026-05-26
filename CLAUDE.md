@@ -152,3 +152,25 @@ The audio stack no longer carries `@available(macOS 14.4, *)` because the Packag
 - Comments explain **why**, not what. Don't add `// MARK:` proliferation or restate the function name.
 - New user-facing text always goes via `L10n` + both `Localizable.strings`. Code review hint: `grep -rEn '"[^"]*[ぁ-んァ-ヶ一-龯][^"]*"' Sources/GijirokuTaker/UI/` should return zero hits (it's currently dry-run clean — only LLM-output parsers and the Whisper hallucination dictionary contain hard-coded Japanese, and they're not UI strings).
 - Tests live in `Tests/GijirokuCoreTests/` (Swift Testing, not XCTest). The Core layer is what's worth unit testing; audio IO and SwiftUI views are integration-tested manually via the CLI runner and the bundled app.
+
+## Auto-commit policy
+
+Claude Code commits proactively, at appropriate granularity, without waiting for the user to ask. The goal is a clean, readable `git log` that a future contributor can scan for context.
+
+Commit after each coherent unit of work lands and builds + tests green. "Coherent" means one feature, one bug fix, or one refactor — not "everything I did in this session".
+
+Granularity rules of thumb:
+
+- Each commit should pass `swift test` on its own.
+- One feature touching N files → one commit, even if N is large. Don't artificially split.
+- Two unrelated changes → two commits, even if they touch overlapping files (use `git add -p` or stage individual files).
+- Pure refactors (rename, extract) go in their own commit, separate from behavior changes.
+- Docs / strings / config tweaks that accompany a feature ride along in that feature's commit. Standalone doc-only changes get their own `docs:` commit.
+
+Commit messages use Conventional Commit prefixes (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`). Subject line ≤ 72 chars, present-tense imperative. The body explains the *why* — what changed is in the diff.
+
+Include `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` at the end of every Claude-authored commit as the co-authorship trailer.
+
+Never commit build artifacts (`build/`, `.build/`, `xcode-build/`), local model caches, recordings, or anything matching `.gitignore`. Re-run `git status` before staging to confirm.
+
+Only push when the user explicitly asks; commits accumulate locally otherwise.

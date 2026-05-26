@@ -7,6 +7,9 @@
 "recording.regenerate_summary.help" = "Send the entire transcript back through the LLM to regenerate summary and events";
 "recording.save_destination" = "Save to:";
 "recording.template" = "Template";
+"recording.diarization_analyzing" = "Diarization: analyzing…";
+"recording.diarization_count_format" = "Diarization: %d speaker(s)";
+"recording.diarization_help" = "Pyannote (SpeakerKit) tags each transcript segment with a speaker label. The count reflects distinct speakers that have appeared in the transcript so far.";
 
 /* === Sidebar === */
 "sidebar.unfiled" = "Unfiled";
@@ -38,9 +41,21 @@
 "sheet.confirm_delete_message" = "This action cannot be undone.";
 
 /* === Detail panes === */
+"pane.transcript.title" = "Transcript";
+"pane.summary.title" = "Summary";
+"pane.events.title" = "Actions & Decisions";
 "pane.transcript.placeholder" = "Transcript will appear here";
 "pane.summary.placeholder" = "Summary will appear here as the meeting progresses";
 "pane.events.placeholder" = "Questions, decisions, and actions will appear here";
+"pane.view_mode.list" = "List";
+"pane.view_mode.markdown" = "Markdown";
+"pane.view_mode.help" = "Toggle Summary/Events between the list view and Markdown (same format as export)";
+
+/* === Event kinds === */
+"event.kind.topic" = "Topic";
+"event.kind.question" = "Question";
+"event.kind.decision" = "Decision";
+"event.kind.action" = "Action";
 
 /* === Session detail === */
 "session.title_fallback" = "Session";
@@ -56,8 +71,13 @@
 "settings.tab.advanced" = "Advanced";
 
 /* === Settings: General === */
+"settings.app_language" = "App language";
+"settings.app_language.system" = "Follow system";
+"settings.app_language.ja" = "日本語";
+"settings.app_language.en" = "English";
+"settings.app_language.caption" = "Changes apply immediately.";
 "settings.transcription_model" = "Transcription model";
-"settings.language" = "Language";
+"settings.language" = "Transcription language";
 "settings.takes_effect_caption" = "Changes take effect on the next Start.";
 
 /* === Settings: LLM === */
@@ -67,19 +87,27 @@
 "settings.no_models" = "(no models)";
 "settings.refresh_models_help" = "Reload model list";
 "settings.ollama_url" = "Ollama URL";
-"settings.ollama_caption" = "Ollama must be running and the model must already be pulled.";
+"settings.ollama_caption" = "When Ollama is running you can pull recommended models directly from this screen.";
 "settings.mlx_caption" = "Downloaded automatically from HuggingFace on first use (several GB, network required).";
+"settings.ollama_reachable" = "Ollama server is reachable";
+"settings.ollama_unreachable" = "Cannot reach Ollama server (is it running?)";
+"settings.ollama_install_link" = "Install Ollama";
+"settings.model_ready" = "Model is ready";
+"settings.model_failed_format" = "Download failed: %@";
+"settings.pull_model" = "Download this model";
+"settings.retry_pull" = "Retry";
 
 /* === Settings: Audio === */
 "settings.capture_system" = "Capture system audio";
 "settings.capture_mic" = "Capture microphone";
-"settings.voice_processing" = "Echo cancellation (AEC + noise suppression + AGC)";
+"settings.vad" = "Voice activity detection (VAD)";
 "settings.diarization" = "Speaker diarization (experimental, Pyannote)";
 "settings.input_device" = "Input device";
 "settings.input_default" = "System default";
 "settings.reload" = "Reload";
 "settings.system_audio_caption" = "System audio is captured via ScreenCaptureKit. macOS will prompt you for Screen Recording permission on first use (no video is actually recorded).";
-"settings.voice_processing_caption" = "Echo cancellation (Apple VoiceProcessingIO) suppresses double-transcription when meeting audio plays from speakers and bleeds back into the mic. Side effect: the speaker output is ducked. Off by default; headphones are recommended.";
+"settings.bleed_dedup_caption" = "Speaker-meeting safe: when the meeting audio comes out of the speakers and bleeds back into the mic, any microphone segment matching a system-audio segment is dropped automatically. Apple's VoiceProcessingIO is not used, so hitting Start never ducks your speaker output.";
+"settings.vad_caption" = "With Voice Activity Detection enabled, audio is split at silence boundaries before being passed to Whisper. This prevents segment cuts in the middle of a sentence and produces meeting-friendly chunking. Disable only if you need to capture very quiet speech that the energy threshold rejects.";
 "settings.diarization_caption" = "Speaker diarization uses SpeakerKit (Pyannote, CoreML) to attach a speaker label to each transcript segment. Downloads ~30 MB on first use. CPU/GPU usage rises noticeably for long meetings. Labels are stabilized across rolling windows by time overlap, but extended silence may cause a speaker to be re-assigned.";
 
 /* === Settings: Templates === */
@@ -103,6 +131,10 @@
 "style.inherit_zero" = "Inherit";
 "style.unlimited_zero" = "Unlimited";
 "style.inherit_caption" = "Leave blank / 0 to inherit from the next less-specific scope.";
+"style.export_template_label" = "Export template (Markdown)";
+"style.export_template_example" = "Placeholders: {{title}}, {{date}}, {{duration}}, {{summary}}, {{topics}}, {{actions}}, {{decisions}}, {{questions}}, {{events}}, {{transcript}}. Leave blank to use the built-in default (Summary / Topics / Action Items / Decisions / Questions).";
+"session.export" = "Export";
+"session.export.help" = "Save this session as a Markdown file";
 "style.project_caption" = "Applied to every session recorded into this project. Blank fields inherit from User settings.";
 "style.session_caption" = "Applied only when re-summarizing this session. Blank fields inherit from Project settings.";
 
@@ -167,15 +199,28 @@
 "onboarding.welcome.subtitle" = "A privacy-first meeting note-taker powered by local LLMs";
 "onboarding.welcome.detail" = "Everything you say and everything the model produces stays on this Mac. Nothing leaves the device.";
 "onboarding.permissions.title" = "Permissions needed";
-"onboarding.permissions.mic" = "Microphone: used to transcribe what you say.";
-"onboarding.permissions.screen" = "Screen Recording: required to capture audio from other apps (e.g. the other side of Zoom or Meet calls). No video is ever recorded.";
-"onboarding.permissions.detail" = "macOS will ask you to grant these permissions the first time you hit Record — please choose Allow.";
+"onboarding.permissions.mic" = "Microphone (transcribe what you say)";
+"onboarding.permissions.screen" = "Screen Recording (capture system audio — no video recorded)";
+"onboarding.permissions.notifications" = "Notifications (e.g. when model download finishes)";
+"onboarding.permissions.mic_short" = "Mic";
+"onboarding.permissions.screen_short" = "Screen";
+"onboarding.permissions.notifications_short" = "Notif";
+"onboarding.permissions.detail" = "Granting these here means your first Record press goes straight to recording instead of stalling on permission prompts. Note that changing Screen Recording may require an app restart to take effect.";
+"onboarding.permissions.request" = "Request";
+"onboarding.permissions.open_settings" = "Open System Settings";
+"onboarding.permissions.status_granted" = "Granted";
+"onboarding.permissions.status_not_requested" = "Not requested yet";
+"onboarding.permissions.status_denied" = "Not granted (change in System Settings)";
+"onboarding.recap.title" = "Your setup";
+"onboarding.recap.permissions" = "Permissions";
+"onboarding.recap.llm" = "LLM";
+"onboarding.recap.audio" = "Audio";
 "onboarding.llm.title" = "LLM backend";
 "onboarding.llm.detail" = "Pick which local LLM produces summaries and action items. You can change this later.";
 "onboarding.llm.mlx_recommend" = "MLX is recommended: runs entirely inside the app with no external dependency. The model (~2–5 GB) downloads automatically on first use.";
 "onboarding.audio.title" = "Audio settings";
 "onboarding.audio.detail" = "Choose how the app captures audio. You can change these later in Settings.";
-"onboarding.audio.recommend" = "Recommended: use headphones, enable both system audio and microphone capture, leave AEC off, and turn on speaker diarization if you want per-speaker labels.";
+"onboarding.audio.recommend" = "Recommended: keep both system audio and microphone capture on — speaker-meeting bleed is handled by transcript-level dedup, so you don't need headphones. Turn on speaker diarization if you want per-speaker labels.";
 "onboarding.usage.title" = "How to use it";
 "onboarding.usage.step_record" = "Hit Record at the top of the sidebar to start a meeting.";
 "onboarding.usage.step_project" = "Use the 📁+ button (top-right) to create projects so your meetings stay organized.";
@@ -187,3 +232,23 @@
 "onboarding.skip" = "Skip";
 "onboarding.show_again" = "Don't show this again";
 "onboarding.menu" = "Show tutorial";
+
+/* === Log Viewer === */
+"log.menu" = "Show log…";
+"log.title" = "Log";
+"log.auto_scroll" = "Auto-scroll";
+"log.filter_placeholder" = "Filter (text)";
+"log.entry_count_format" = "%d / %d lines";
+"log.copy" = "Copy";
+"log.clear" = "Clear";
+
+/* === Language override (recording sidebar) === */
+"language.use_default_format" = "Default (%@)";
+
+/* === Model background download === */
+"onboarding.llm.download_caption" = "The selected model is downloading in the background. You'll get a notification when it finishes. Feel free to continue.";
+"onboarding.llm.download_in_progress_format" = "Downloading… %d%%";
+"onboarding.llm.download_completed" = "Downloaded";
+"onboarding.llm.download_failed_format" = "Download failed: %@";
+"model.download.notification_title" = "Model download complete";
+"model.download.notification_body_format" = "%@ is ready to use";

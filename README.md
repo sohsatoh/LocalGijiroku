@@ -2,6 +2,8 @@
 
 English | [日本語](./README.ja.md)
 
+![LocalGijiroku screenshot](./docs/screenshot.png)
+
 A local-first meeting recorder for macOS. Records your audio, transcribes it with WhisperKit on-device, and produces rolling LLM summaries plus extracted decisions, actions, and questions — all without a single byte leaving the machine.
 
 ## What it does
@@ -12,7 +14,12 @@ A local-first meeting recorder for macOS. Records your audio, transcribes it wit
   - a rolling **summary** that updates section-by-section as topics shift, and
   - extraction of structured **events** (questions / decisions / action items, with owner + due date when stated).
 - Optional **speaker diarization** via Pyannote (SpeakerKit), with cross-window label persistence by time-overlap clustering.
-- Sessions are organized into **projects**, stored on disk as plain JSON, exportable as Markdown.
+- Sessions are organized into **projects**, stored on disk as plain JSON, exportable as Markdown via a customizable template.
+- Per-session, per-project, and user-level **summary style templates** (bullet word limits, section caps, extra instructions for the LLM).
+- **Guided onboarding** that walks through permissions (mic / screen recording / notifications), LLM backend choice, and audio setup.
+- Background **model downloader** with progress + macOS notification on completion, so the first Start isn't blocked on a multi-GB pull.
+- Built-in **log viewer** (Cmd-Shift-L) for inspecting capture / transcription / LLM activity without leaving the app.
+- **UI language switcher** (Japanese / English / Follow System) in Settings → General, applied live.
 
 ## Privacy
 
@@ -57,7 +64,7 @@ The first time you select an MLX model, ~2–5 GB will download from HuggingFace
 ## Tests
 
 ```bash
-swift test                                       # ~50 hermetic unit tests
+swift test                                       # ~70 hermetic unit tests
 RUN_OLLAMA_TESTS=1 swift test --filter ollama    # live Ollama integration
 .build/debug/GijirokuCLI /path/to/audio.wav      # headless E2E from a WAV
 ```

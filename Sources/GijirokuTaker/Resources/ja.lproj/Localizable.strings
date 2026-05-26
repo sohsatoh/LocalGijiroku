@@ -7,6 +7,9 @@
 "recording.regenerate_summary.help" = "これまでの transcript 全体を LLM に投げ直してサマリ/イベントを再生成";
 "recording.save_destination" = "保存先:";
 "recording.template" = "テンプレ";
+"recording.diarization_analyzing" = "話者分離: 解析中…";
+"recording.diarization_count_format" = "話者分離: %d 名検出";
+"recording.diarization_help" = "Pyannote (SpeakerKit) で各 transcript セグメントに speaker ラベルを付けています。検出数は字幕にラベルが付いた話者の累計です。";
 
 /* === Sidebar === */
 "sidebar.unfiled" = "未分類";
@@ -38,9 +41,21 @@
 "sheet.confirm_delete_message" = "この操作は取り消せません。";
 
 /* === Detail panes === */
+"pane.transcript.title" = "字幕";
+"pane.summary.title" = "サマリ";
+"pane.events.title" = "議題・タスク";
 "pane.transcript.placeholder" = "ここに字幕が表示されます";
 "pane.summary.placeholder" = "会議が進行するとサマリがここに表示されます";
 "pane.events.placeholder" = "質問・決定事項・アクションがここに表示されます";
+"pane.view_mode.list" = "リスト";
+"pane.view_mode.markdown" = "Markdown";
+"pane.view_mode.help" = "サマリ／イベントの表示形式を切替（Markdown はエクスポートと同じ書式）";
+
+/* === Event kinds === */
+"event.kind.topic" = "話題";
+"event.kind.question" = "質問";
+"event.kind.decision" = "決定";
+"event.kind.action" = "アクション";
 
 /* === Session detail === */
 "session.title_fallback" = "セッション";
@@ -56,8 +71,13 @@
 "settings.tab.advanced" = "詳細";
 
 /* === Settings: General === */
+"settings.app_language" = "表示言語";
+"settings.app_language.system" = "システム設定に従う";
+"settings.app_language.ja" = "日本語";
+"settings.app_language.en" = "English";
+"settings.app_language.caption" = "変更は即座に反映されます。";
 "settings.transcription_model" = "文字起こしモデル";
-"settings.language" = "言語";
+"settings.language" = "文字起こし言語";
 "settings.takes_effect_caption" = "変更は次回の Start から有効になります。";
 
 /* === Settings: LLM === */
@@ -67,19 +87,27 @@
 "settings.no_models" = "(該当モデルなし)";
 "settings.refresh_models_help" = "モデル一覧を再読み込み";
 "settings.ollama_url" = "Ollama URL";
-"settings.ollama_caption" = "Ollama サーバーが起動していて、モデルが pull 済みである必要があります。";
+"settings.ollama_caption" = "Ollama サーバーが起動していると、推奨モデルをこの画面から直接 pull できます。";
 "settings.mlx_caption" = "初回選択時に HuggingFace から自動ダウンロードされます（数 GB、ネット接続必須）。";
+"settings.ollama_reachable" = "Ollama サーバーに接続できました";
+"settings.ollama_unreachable" = "Ollama サーバーに接続できません (起動していますか?)";
+"settings.ollama_install_link" = "Ollama をインストール";
+"settings.model_ready" = "モデル使用可能";
+"settings.model_failed_format" = "DL 失敗: %@";
+"settings.pull_model" = "このモデルをダウンロード";
+"settings.retry_pull" = "再試行";
 
 /* === Settings: Audio === */
 "settings.capture_system" = "システム音声をキャプチャ";
 "settings.capture_mic" = "マイクをキャプチャ";
-"settings.voice_processing" = "エコーキャンセル (AEC + ノイズ抑制 + AGC)";
+"settings.vad" = "音声区間検出 (VAD)";
 "settings.diarization" = "話者分離 (実験的、Pyannote)";
 "settings.input_device" = "入力デバイス";
 "settings.input_default" = "システムのデフォルト";
 "settings.reload" = "再読込";
 "settings.system_audio_caption" = "システム音声は ScreenCaptureKit 経由でキャプチャします。初回利用時に macOS が「画面録画」権限のプロンプトを出すので許可してください（映像は録画しません）。";
-"settings.voice_processing_caption" = "エコーキャンセル (Apple VoiceProcessingIO) は、スピーカー出力でビデオ会議をする場合に相手の声が二重 transcript されるのを抑える機能。ただし副作用としてスピーカー出力が小さくなる ducking が起きるため、デフォルトは OFF。ヘッドホン運用が推奨です。スピーカー会議で二重 transcript が気になる時だけ ON にしてください。";
+"settings.bleed_dedup_caption" = "スピーカー会議でも安心: スピーカーから出ている会議相手の声がマイクに回り込んだ場合は、システム音声側の transcript と内容が一致する mic セグメントを自動で重複排除します。Apple VoiceProcessingIO は使わない設計なので、Start を押してもスピーカー出力が ducking で小さくなることはありません。";
+"settings.vad_caption" = "Voice Activity Detection を有効にすると、Whisper に渡す前に音声を「発話あり」区間で先に切り分けます。会議のように沈黙が混じる音声でセグメントが文の途中で切れる問題を抑え、議事録らしい区切りになります。極端に静かな発話まで拾いたい場合のみ OFF を検討。";
 "settings.diarization_caption" = "話者分離は SpeakerKit (Pyannote, CoreML) で各 transcript セグメントに speaker ラベルを付与します。初回 ON 時に segmentation + embedding モデル (~30MB) を DL。CPU/GPU 負荷が増えるので録音が長いと遅延しがち。ローリング窓の時間重複でラベルを安定化していますが、長い沈黙を挟むと再アサインされる可能性があります。";
 
 /* === Settings: Templates === */
@@ -103,6 +131,10 @@
 "style.inherit_zero" = "継承";
 "style.unlimited_zero" = "無制限";
 "style.inherit_caption" = "空欄 / 0 を残すと一つ上のスコープの設定を引き継ぎます。";
+"style.export_template_label" = "エクスポートテンプレート (Markdown)";
+"style.export_template_example" = "利用可能なプレースホルダ: {{title}}, {{date}}, {{duration}}, {{summary}}, {{topics}}, {{actions}}, {{decisions}}, {{questions}}, {{events}}, {{transcript}}。空欄なら組み込みデフォルト (Summary / Topics / Action Items / Decisions / Questions) を使用。";
+"session.export" = "エクスポート";
+"session.export.help" = "このセッションを Markdown ファイルとして保存";
 "style.project_caption" = "このプロジェクトに録音する全セッションへ適用されます。空欄ならユーザー設定を継承。";
 "style.session_caption" = "このセッションを再サマリする際にのみ適用されます。空欄ならプロジェクト設定を継承。";
 
@@ -167,15 +199,28 @@
 "onboarding.welcome.subtitle" = "ローカル LLM で動く、プライバシー重視の議事録アプリ";
 "onboarding.welcome.detail" = "あなたの音声と発言内容は、すべてこの Mac の中だけで処理されます。クラウドに送信されることはありません。";
 "onboarding.permissions.title" = "必要な権限";
-"onboarding.permissions.mic" = "マイク: あなたの発言を文字起こしするために使います。";
-"onboarding.permissions.screen" = "画面録画: 他アプリの音声 (Zoom や Meet の相手の声など) を取り込むために必要。映像は録画しません。";
-"onboarding.permissions.detail" = "初回録音時に macOS の許可ダイアログが出るので「許可」を選んでください。";
+"onboarding.permissions.mic" = "マイク (発言の文字起こし)";
+"onboarding.permissions.screen" = "画面録画 (システム音声の取得、映像は記録しません)";
+"onboarding.permissions.notifications" = "通知 (モデル DL 完了などの通知)";
+"onboarding.permissions.mic_short" = "マイク";
+"onboarding.permissions.screen_short" = "画面録画";
+"onboarding.permissions.notifications_short" = "通知";
+"onboarding.permissions.detail" = "ここで権限を許可しておくと、Record を押した直後にダイアログで止まらずに録音を開始できます。「画面録画」の変更は反映に再起動が必要な場合があります。";
+"onboarding.permissions.request" = "許可を求める";
+"onboarding.permissions.open_settings" = "システム設定を開く";
+"onboarding.permissions.status_granted" = "許可済み";
+"onboarding.permissions.status_not_requested" = "未確認";
+"onboarding.permissions.status_denied" = "未許可（システム設定で変更可）";
+"onboarding.recap.title" = "セットアップの確認";
+"onboarding.recap.permissions" = "権限";
+"onboarding.recap.llm" = "LLM";
+"onboarding.recap.audio" = "オーディオ";
 "onboarding.llm.title" = "LLM バックエンド";
 "onboarding.llm.detail" = "サマリと議題抽出に使う LLM を選びます。後で変更可能です。";
 "onboarding.llm.mlx_recommend" = "MLX を推奨。アプリ単独で動き、外部依存なし。初回録音時にモデルが自動 DL されます (約 2〜5 GB)。";
 "onboarding.audio.title" = "オーディオ設定";
 "onboarding.audio.detail" = "音声の取り込み方法を選びます。あとで設定画面から変更できます。";
-"onboarding.audio.recommend" = "推奨: ヘッドホンで会議に参加し、システム音声 + マイクを両方ON、AEC は OFF、必要なら話者分離を ON。";
+"onboarding.audio.recommend" = "推奨: システム音声とマイクを両方 ON にしておけば、スピーカーで会議していても OK。マイクに回り込んだ相手の声は自動で重複排除されます。話者を区別したいときだけ話者分離を ON に。";
 "onboarding.usage.title" = "使い方";
 "onboarding.usage.step_record" = "サイドバー左上の「録音開始」を押して会議を録音。";
 "onboarding.usage.step_project" = "右上の「📁+」でプロジェクトを作成すると議事録を整理できます。";
@@ -187,3 +232,23 @@
 "onboarding.skip" = "スキップ";
 "onboarding.show_again" = "次回以降表示しない";
 "onboarding.menu" = "チュートリアルを再表示";
+
+/* === Log Viewer === */
+"log.menu" = "ログを表示...";
+"log.title" = "ログ";
+"log.auto_scroll" = "自動スクロール";
+"log.filter_placeholder" = "フィルタ (テキスト)";
+"log.entry_count_format" = "%d / %d 行";
+"log.copy" = "コピー";
+"log.clear" = "クリア";
+
+/* === Language override (recording sidebar) === */
+"language.use_default_format" = "デフォルト (%@)";
+
+/* === Model background download === */
+"onboarding.llm.download_caption" = "選択したモデルをバックグラウンドでダウンロードしています。完了すると通知が届きます。「次へ」を押して進んで構いません。";
+"onboarding.llm.download_in_progress_format" = "ダウンロード中… %d%%";
+"onboarding.llm.download_completed" = "ダウンロード済み";
+"onboarding.llm.download_failed_format" = "ダウンロード失敗: %@";
+"model.download.notification_title" = "モデルのダウンロードが完了しました";
+"model.download.notification_body_format" = "%@ が使えるようになりました";
