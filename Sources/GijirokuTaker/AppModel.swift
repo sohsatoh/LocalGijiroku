@@ -42,6 +42,11 @@ final class AppModel: ObservableObject {
     /// (within this app run) until they reset it. Not persisted to disk —
     /// the persistent default lives in Settings.
     @Published var languageOverride: String? = nil
+    /// Per-session speaker count hint for Pyannote diarization. 0 = automatic.
+    /// Set in the sidebar before starting a recording; passed to
+    /// `WhisperTranscription.Config.speakerCount` on Start. Not persisted to
+    /// disk — carries over to the next session until the user changes it.
+    @Published var pendingSpeakerCount: Int = 0
 
     /// The whisper language that will be used on next Start.
     var effectiveLanguage: String {
@@ -309,7 +314,7 @@ final class AppModel: ObservableObject {
                 language: whisperLang ?? "ja",
                 diarizationEnabled: settings.diarizationEnabled,
                 vadEnabled: settings.vadEnabled,
-                speakerCount: settings.speakerCount > 0 ? settings.speakerCount : nil
+                speakerCount: pendingSpeakerCount > 0 ? pendingSpeakerCount : nil
             )
         )
         self.transcriptionEngine = transcription
