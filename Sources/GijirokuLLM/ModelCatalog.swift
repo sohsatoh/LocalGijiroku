@@ -58,6 +58,15 @@ public enum MLXModelCatalog {
         .init(id: "mlx-community/gemma-2-2b-it-4bit", displayName: "Gemma 2 2B IT 4bit", backend: .mlx, sizeEstimate: "~1.5 GB"),
         .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B Instruct 4bit", backend: .mlx, sizeEstimate: "~1.8 GB"),
         .init(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", displayName: "Qwen2.5 3B Instruct 4bit", backend: .mlx, sizeEstimate: "~1.9 GB"),
+        // Experimental — Gemma 4 E2B IT 4bit. mlx-community ships it as
+        // `Gemma4ForConditionalGeneration` (text + audio + vision), and
+        // it's the most-downloaded gemma-4 variant on mlx-community.
+        // mlx-swift-lm support is UNVERIFIED — Gemma 3 hit a v_proj
+        // shape mismatch (see exclusion note below) and Gemma 4 may
+        // share the same path. Surfaced here so a real chat() call can
+        // tell us whether the loader handles it; if it doesn't, remove
+        // this entry and append it to the exclusion comment below.
+        .init(id: "mlx-community/gemma-4-e2b-it-4bit", displayName: "Gemma 4 E2B IT 4bit (experimental)", backend: .mlx, sizeEstimate: "~1.7 GB"),
         // Recommended default — Qwen3 Instruct-2507 is non-reasoning (no
         // `<think>` blocks), instruction-tuned, multilingual, and small
         // enough that the first-Start download is reasonable.
