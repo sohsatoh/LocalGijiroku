@@ -211,6 +211,15 @@ public actor WhisperTranscription: TranscriptionEngine {
         .microphone: SourceBuffer(source: .microphone),
         .system: SourceBuffer(source: .system),
     ]
+    /// Per-source wall-clock end time of the most-recently confirmed
+    /// Whisper segment. Each inference cycle hands this value (translated
+    /// into the current audio buffer's local time) to WhisperKit's
+    /// `DecodingOptions.clipTimestamps`, so the decoder skips audio that
+    /// has already produced confirmed text. Same technique
+    /// `AudioStreamTranscriber` and WhisperX use to keep the rolling
+    /// decoder from re-emitting (with slightly different wording every
+    /// time) content that is already in the transcript.
+    private var lastConfirmedEnd: [AudioSource: Date] = [:]
 
     public init(config: Config = .init()) {
         self.config = config
@@ -299,6 +308,10 @@ public actor WhisperTranscription: TranscriptionEngine {
             .microphone: SourceBuffer(source: .microphone),
             .system: SourceBuffer(source: .system),
         ]
+        // Reset the clip pointer too — a fresh recording must not inherit
+        // the previous session's confirmed-up-to time, otherwise Whisper
+        // would skip the entire start of the new audio.
+        lastConfirmedEnd = [:]
         var lastInferenceAt = Date.distantPast
 
         var chunkCount = 0
@@ -347,7 +360,17 @@ public actor WhisperTranscription: TranscriptionEngine {
     ) async {
         guard let whisper else { return }
         do {
-            let options = DecodingOptions(
+            // Translate `lastConfirmedEnd` (wall-clock) into "skip until N
+            // seconds into the current audio buffer" for Whisper. Anything
+            // < 0 (the confirmed point is older than the rolling buffer's
+            // start) clamps to 0 — there's no audio to skip in that case.
+            // The unconfirmed tail from the previous cycle starts AFTER
+            // lastConfirmedEnd, so it still gets re-decoded and refined.
+            var clipFrom: TimeInterval = 0
+            if let confirmedEnd = lastConfirmedEnd[source] {
+                clipFrom = max(0, confirmedEnd.timeIntervalSince(bufferStartedAt))
+            }
+            var options = DecodingOptions(
                 task: .transcribe,
                 language: config.language,
                 temperature: 0,
@@ -356,6 +379,14 @@ public actor WhisperTranscription: TranscriptionEngine {
                 withoutTimestamps: false,
                 suppressBlank: true
             )
+            // Skip audio that already produced confirmed text. Without this
+            // every cycle re-decoded the same rolling buffer and the
+            // decoder's segmentation / wording drifted between cycles,
+            // producing the long-standing duplicate-row problem
+            // ("東京オンエックスの小林です" vs "東京Xの小林です。…").
+            if clipFrom > 0 {
+                options.clipTimestamps = [Float(clipFrom)]
+            }
             let results = try await whisper.transcribe(audioArray: samples, decodeOptions: options)
             let totalSegments = results.reduce(0) { $0 + $1.segments.count }
             logger.info("\(String(describing: source), privacy: .public) result: results=\(results.count, privacy: .public) segments=\(totalSegments, privacy: .public)")
@@ -454,6 +485,19 @@ public actor WhisperTranscription: TranscriptionEngine {
                 let preview = transcript.text.prefix(60)
                 logger.info("\(String(describing: source), privacy: .public) seg ✓: \"\(String(preview), privacy: .public)\" speaker=\(item.3 ?? "-", privacy: .public)")
                 output.yield(transcript)
+            }
+
+            // Advance the clip pointer to the end of the last confirmed
+            // segment so the next cycle's Whisper invocation skips the
+            // audio that already produced stable text. Only confirmed
+            // segments count — the unconfirmed tail is allowed to keep
+            // being re-decoded for refinement.
+            if cutoffIndex > 0, let lastConfirmed = flatSegments.prefix(cutoffIndex).last {
+                let absEnd = lastConfirmed.2 // segEnd as Date
+                let priorEnd = lastConfirmedEnd[source] ?? .distantPast
+                if absEnd > priorEnd {
+                    lastConfirmedEnd[source] = absEnd
+                }
             }
 
             // Unconfirmed tail: merge all trailing segments into ONE
