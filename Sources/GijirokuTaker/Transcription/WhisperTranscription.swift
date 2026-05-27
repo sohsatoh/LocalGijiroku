@@ -111,6 +111,12 @@ public actor WhisperTranscription: TranscriptionEngine {
         /// "may be rewritten by the next pass" zone, everything older is
         /// promoted to confirmed.
         public let requiredSegmentsForConfirmation: Int
+        /// Number of speakers to tell pyannote to find. `nil` = automatic
+        /// detection (default). Setting this to a known value (e.g. 2 for a
+        /// 1-on-1 meeting) prevents the clustering step from over- or
+        /// under-splitting speakers, which is the most common accuracy failure
+        /// mode in short rolling windows.
+        public let speakerCount: Int?
 
         public init(
             modelName: String = "large-v3-v20240930_626MB",
@@ -123,7 +129,8 @@ public actor WhisperTranscription: TranscriptionEngine {
             diarizationEnabled: Bool = false,
             vadEnabled: Bool = true,
             vadEnergyThreshold: Float = 0.02,
-            requiredSegmentsForConfirmation: Int = 2
+            requiredSegmentsForConfirmation: Int = 2,
+            speakerCount: Int? = nil
         ) {
             self.modelName = modelName
             self.language = language
@@ -133,6 +140,7 @@ public actor WhisperTranscription: TranscriptionEngine {
             self.vadEnabled = vadEnabled
             self.vadEnergyThreshold = vadEnergyThreshold
             self.requiredSegmentsForConfirmation = requiredSegmentsForConfirmation
+            self.speakerCount = speakerCount
         }
     }
 
@@ -555,7 +563,8 @@ public actor WhisperTranscription: TranscriptionEngine {
         guard config.diarizationEnabled else { return [] }
         guard let speakerKit = await ensureSpeakerLoaded() else { return [] }
         do {
-            let diarization = try await speakerKit.diarize(audioArray: samples)
+            let options = PyannoteDiarizationOptions(numberOfSpeakers: config.speakerCount)
+            let diarization = try await speakerKit.diarize(audioArray: samples, options: options)
             // `diarization.segments` exposes (start, end, speaker) entries.
             // Convert to our internal Sendable representation.
             let spans = diarization.segments.map { seg in

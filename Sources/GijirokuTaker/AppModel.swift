@@ -308,7 +308,8 @@ final class AppModel: ObservableObject {
                 modelName: settings.whisperModel,
                 language: whisperLang ?? "ja",
                 diarizationEnabled: settings.diarizationEnabled,
-                vadEnabled: settings.vadEnabled
+                vadEnabled: settings.vadEnabled,
+                speakerCount: settings.speakerCount > 0 ? settings.speakerCount : nil
             )
         )
         self.transcriptionEngine = transcription
