@@ -849,10 +849,11 @@ final class AppModel: ObservableObject {
     /// Minimum wall-clock interval between accepted heading insertions.
     /// Acts as a low-pass filter so the section structure stays
     /// paragraph-sized regardless of how trigger-happy the detector
-    /// gets on noisy mid-window content. 180 s ≈ six summary turns,
-    /// targeting roughly one heading per 3–5 minutes of meeting time.
-    /// 90 s (the previous value) still felt sentence-paced in real
-    /// recordings; 180 s lands closer to the table-of-contents
-    /// abstraction users actually want.
-    private static let minHeadingIntervalSec: TimeInterval = 180
+    /// gets on noisy mid-window content. 120 s ≈ four summary turns —
+    /// short enough that a real topic pivot lands a new heading within
+    /// a couple of minutes, long enough that sentence-scale wobbles
+    /// don't churn the section list. 90 s was too quick (sentence-
+    /// paced); 180 s was too slow (real shifts went unmarked for
+    /// 10+ minutes). 120 s sits between.
+    private static let minHeadingIntervalSec: TimeInterval = 120
 }
