@@ -189,6 +189,61 @@ private func seg(
     #expect(result == "hello world")
 }
 
+@Test func headingBoundarySplitsOtherwiseMergeableTurn() {
+    // Same speaker, same source, gap well under maxIntraTurnGap — would
+    // normally collapse into one turn. A heading anchored between the
+    // two segments must force the split so the `.turns` layout doesn't
+    // render the heading orphaned next to a single block that
+    // straddles it.
+    let segments = [
+        seg("前半1", speaker: "A", start: 0, duration: 1),
+        seg("前半2", speaker: "A", start: 1.2, duration: 1),
+        seg("後半1", speaker: "A", start: 3, duration: 1),
+        seg("後半2", speaker: "A", start: 4.2, duration: 1),
+    ]
+    // Anchor between the second and third segment (2.2 < 2.5 < 3).
+    let origin = Date(timeIntervalSinceReferenceDate: 0)
+    let heading = TranscriptHeading(
+        text: "新しい話題",
+        startTime: origin.addingTimeInterval(2.5)
+    )
+    let turns = TranscriptTurnGrouping.turns(from: segments, headings: [heading])
+    #expect(turns.count == 2)
+    #expect(turns[0].segments.map(\.text) == ["前半1", "前半2"])
+    #expect(turns[1].segments.map(\.text) == ["後半1", "後半2"])
+}
+
+@Test func headingAtExactSegmentBoundaryStillSplits() {
+    // Heading anchored at exactly seg2.startTime (the conservative
+    // boundary the AppModel emits as `max(endTime)+0.001`). The
+    // splitter must treat this as "belongs at the start of the new
+    // section", i.e. split.
+    let segments = [
+        seg("前", speaker: "A", start: 0, duration: 1),
+        seg("後", speaker: "A", start: 2, duration: 1),
+    ]
+    let origin = Date(timeIntervalSinceReferenceDate: 0)
+    let heading = TranscriptHeading(
+        text: "境界",
+        startTime: origin.addingTimeInterval(2)
+    )
+    let turns = TranscriptTurnGrouping.turns(from: segments, headings: [heading])
+    #expect(turns.count == 2)
+}
+
+@Test func headingOutsideTurnRangeDoesNotForceSplit() {
+    // Heading well before all segments — no segment pair straddles it,
+    // so the grouper should still produce a single turn.
+    let segments = [
+        seg("a", speaker: "A", start: 100, duration: 1),
+        seg("b", speaker: "A", start: 101.2, duration: 1),
+    ]
+    let origin = Date(timeIntervalSinceReferenceDate: 0)
+    let heading = TranscriptHeading(text: "古い", startTime: origin)
+    let turns = TranscriptTurnGrouping.turns(from: segments, headings: [heading])
+    #expect(turns.count == 1)
+}
+
 @Test func turnIdIsStableAcrossAppendsToSameSpeaker() {
     // SwiftUI uses Turn.id for diffing; appending a new same-speaker
     // segment must keep the same id so the existing block animates

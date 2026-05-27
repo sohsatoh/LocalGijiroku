@@ -227,7 +227,7 @@ struct TranscriptPane: View {
     }
 
     private var turns: [TranscriptTurn] {
-        TranscriptTurnGrouping.turns(from: segments, liveTail: liveTail)
+        TranscriptTurnGrouping.turns(from: segments, liveTail: liveTail, headings: headings)
     }
 
     /// Interleave headings with segments (rows mode), sorted by

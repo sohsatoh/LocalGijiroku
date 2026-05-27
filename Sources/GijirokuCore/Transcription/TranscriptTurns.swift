@@ -115,12 +115,18 @@ public struct TranscriptTurn: Identifiable, Sendable, Equatable {
 ///   - time gap larger than `maxIntraTurnGap` (default 5 s — covers normal
 ///     intra-utterance pauses but starts a new block when the speaker
 ///     trails off and someone else picks up)
+///   - a `TranscriptHeading.startTime` falling between two otherwise-
+///     mergeable segments — the heading is a section divider, so a
+///     continuous run of speech that straddles it must split into the
+///     "before" and "after" halves. Without this, the turns layout
+///     would render a single block with the heading orphaned beside it.
 public enum TranscriptTurnGrouping {
     public static let defaultMaxIntraTurnGap: TimeInterval = 5
 
     public static func turns(
         from segments: [TranscriptSegment],
         liveTail: [AudioSource: TranscriptSegment] = [:],
+        headings: [TranscriptHeading] = [],
         maxIntraTurnGap: TimeInterval = defaultMaxIntraTurnGap
     ) -> [TranscriptTurn] {
         // Order matters: feed segments in chronological order regardless of
@@ -128,6 +134,7 @@ public enum TranscriptTurnGrouping {
         // older segment lands after a newer one due to system / mic
         // interleaving.
         let sorted = segments.sorted { $0.startTime < $1.startTime }
+        let headingTimes = headings.map { $0.startTime }
 
         var turns: [TranscriptTurn] = []
         var current: [TranscriptSegment] = []
@@ -150,7 +157,15 @@ public enum TranscriptTurnGrouping {
                 let sameSource = last.source == seg.source
                 let sameSpeaker = (last.speaker ?? "") == (seg.speaker ?? "")
                 let gap = seg.startTime.timeIntervalSince(last.endTime)
-                if sameSource && sameSpeaker && gap <= maxIntraTurnGap {
+                // Heading boundary check: if any heading's anchor falls
+                // strictly between `last.endTime` and `seg.startTime`,
+                // the new segment starts a fresh section and must not
+                // merge into the in-progress turn even when the source/
+                // speaker/gap criteria all say "same turn".
+                let crossesHeading = headingTimes.contains { h in
+                    h > last.endTime && h <= seg.startTime
+                }
+                if !crossesHeading && sameSource && sameSpeaker && gap <= maxIntraTurnGap {
                     current.append(seg)
                     continue
                 }
