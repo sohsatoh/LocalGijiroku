@@ -156,6 +156,9 @@ struct LibrarySidebar: View {
             // engine has already been built for the locked-in language.
             if !appModel.isRecording {
                 languagePicker
+                if SettingsModel.shared.diarizationEnabled {
+                    speakerCountPicker
+                }
             }
         }
         .padding(8)
@@ -176,6 +179,23 @@ struct LibrarySidebar: View {
                     .tag("")
                 ForEach(WhisperLanguage.allCases) { lang in
                     Text(lang.displayName).tag(lang.rawValue)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .font(.caption)
+        }
+    }
+
+    private var speakerCountPicker: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "person.2")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("", selection: $appModel.pendingSpeakerCount) {
+                Text(loc: "recording.speaker_count.auto").tag(0)
+                ForEach(1...10, id: \.self) { n in
+                    Text(L10n.format("recording.speaker_count.n_format", n)).tag(n)
                 }
             }
             .pickerStyle(.menu)

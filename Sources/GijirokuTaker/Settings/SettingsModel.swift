@@ -28,7 +28,6 @@ final class SettingsModel: ObservableObject {
         static let transcriptFontSize = "transcriptFontSize"
         static let headingDetectionEnabled = "headingDetectionEnabled"
         static let agendaSuggestionEnabled = "agendaSuggestionEnabled"
-        static let speakerCount = "speakerCount"
     }
 
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
@@ -96,11 +95,6 @@ final class SettingsModel: ObservableObject {
     /// so users can pick whichever assistant-side reasoning they value
     /// without paying for the other.
     @AppStorage(Keys.agendaSuggestionEnabled) var agendaSuggestionEnabled: Bool = true
-    /// Fixed speaker count hint for pyannote diarization. 0 = automatic
-    /// detection. When set to a positive value, pyannote uses this as
-    /// the exact number of clusters, which reduces over/under-splitting
-    /// in short rolling windows.
-    @AppStorage(Keys.speakerCount) var speakerCount: Int = 0
 
     var userSummaryStyle: SummaryStyle {
         guard !userSummaryStyleJSON.isEmpty,
