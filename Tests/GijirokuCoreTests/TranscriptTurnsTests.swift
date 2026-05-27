@@ -231,6 +231,72 @@ private func seg(
     #expect(turns.count == 2)
 }
 
+@Test func headingDetachesLiveTailFromPriorTurn() {
+    // Confirmed turn ends at t=2. Tail begins at t=3 (Whisper's rolling
+    // tail for the same source, still streaming). A heading anchored
+    // between them must NOT carry the tail into the prior turn —
+    // otherwise the streaming text continues to render above the
+    // heading divider, which is the exact "字幕が前の heading で続く"
+    // bug.
+    let confirmed = [
+        seg("前半1", speaker: "A", start: 0, duration: 1),
+        seg("前半2", speaker: "A", start: 1, duration: 1),
+    ]
+    let origin = Date(timeIntervalSinceReferenceDate: 0)
+    let tail = TranscriptSegment(
+        source: .microphone,
+        speaker: "A",
+        text: "進行中...",
+        startTime: origin.addingTimeInterval(3),
+        endTime: origin.addingTimeInterval(3.5),
+        isFinal: false,
+        isConfirmed: false
+    )
+    let heading = TranscriptHeading(
+        text: "新話題",
+        startTime: origin.addingTimeInterval(2.5)
+    )
+    let turns = TranscriptTurnGrouping.turns(
+        from: confirmed,
+        liveTail: [.microphone: tail],
+        headings: [heading]
+    )
+    // Expect two turns: the prior confirmed run (no tail), and a virtual
+    // turn for the tail (no confirmed segments). Sorted by startTime so
+    // the heading slots between them.
+    #expect(turns.count == 2)
+    #expect(turns[0].liveTail == nil)
+    #expect(turns[0].segments.map(\.text) == ["前半1", "前半2"])
+    #expect(turns[1].liveTail?.text == "進行中...")
+    #expect(turns[1].segments.isEmpty)
+    #expect(turns[1].startTime > heading.startTime)
+}
+
+@Test func liveTailAttachesNormallyWhenNoHeadingBetween() {
+    // Sanity: with no heading between the prior turn and the tail,
+    // the original attach behaviour must remain — same-source tail
+    // flows inline at the end of the most recent turn.
+    let confirmed = [
+        seg("確定", speaker: "A", start: 0, duration: 1),
+    ]
+    let origin = Date(timeIntervalSinceReferenceDate: 0)
+    let tail = TranscriptSegment(
+        source: .microphone,
+        speaker: "A",
+        text: "続き...",
+        startTime: origin.addingTimeInterval(1.5),
+        endTime: origin.addingTimeInterval(2),
+        isFinal: false,
+        isConfirmed: false
+    )
+    let turns = TranscriptTurnGrouping.turns(
+        from: confirmed,
+        liveTail: [.microphone: tail]
+    )
+    #expect(turns.count == 1)
+    #expect(turns[0].liveTail?.text == "続き...")
+}
+
 @Test func headingOutsideTurnRangeDoesNotForceSplit() {
     // Heading well before all segments — no segment pair straddles it,
     // so the grouper should still produce a single turn.

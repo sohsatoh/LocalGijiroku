@@ -179,6 +179,15 @@ public enum TranscriptTurnGrouping {
         // (the one the speaker is currently extending). If a source has a
         // tail but no confirmed turn yet, synthesise a turn-shell so the
         // first words of a new speaker still appear immediately.
+        //
+        // Heading boundary refinement: if a heading was inserted between
+        // the last confirmed turn for this source and the tail's
+        // startTime, attaching here would render the still-streaming tail
+        // BEFORE the heading divider — making it look like new transcript
+        // is continuing in the previous section. Skip the attach in that
+        // case and let the fall-through code below build a virtual turn
+        // for the tail, so it lands AFTER the heading like every later
+        // confirmed segment will.
         var attached: Set<AudioSource> = []
         var withTails: [TranscriptTurn] = []
         for turn in turns.reversed() {
@@ -187,6 +196,15 @@ public enum TranscriptTurnGrouping {
                 continue
             }
             if let tail = liveTail[turn.source] {
+                let headingCrossesTail = headingTimes.contains { h in
+                    h > turn.endTime && h < tail.startTime
+                }
+                if headingCrossesTail {
+                    // Leave the prior turn untouched; the unattached
+                    // tail will be picked up as a virtual turn below.
+                    withTails.append(turn)
+                    continue
+                }
                 withTails.append(TranscriptTurn(
                     id: turn.id,
                     source: turn.source,
@@ -204,7 +222,10 @@ public enum TranscriptTurnGrouping {
         var result = Array(withTails.reversed())
         // Sources that have a tail but no confirmed segment yet — start a
         // virtual turn so the UI can show "speech in progress" without
-        // waiting for the first confirmed segment.
+        // waiting for the first confirmed segment. Also catches the
+        // heading-boundary case above: a tail that was deliberately
+        // detached from its prior turn surfaces here as its own block
+        // after the heading.
         for (source, tail) in liveTail where !attached.contains(source) {
             result.append(TranscriptTurn(
                 id: tail.id,
