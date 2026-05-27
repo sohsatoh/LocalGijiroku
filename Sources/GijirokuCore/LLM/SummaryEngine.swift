@@ -682,13 +682,22 @@ enum SummaryPrompt {
           extracted separately).
         - Do NOT emit `updates` entries for filler / small talk / greetings.
         - If the fragment has no substantive new content, return
-          {"updates":[]}.
+          {"updates":[]}. An empty response is a GOOD outcome — most
+          turns won't move the summary.
+        - At MOST 3 new bullets across all updates per turn. The fragment
+          covers ~30 s of speech; if you're tempted to add more, you're
+          summarizing line-by-line instead of distilling. Pick the most
+          important points and drop the rest.
 
-        Bullet quality (Notion-style granularity):
-        - Atomic: one fact / point per bullet.
+        Bullet quality (Notion-style granularity — favor FEWER, BROADER
+        bullets over many narrow ones):
+        - One substantive thread per bullet — multiple sentences on the
+          same idea collapse into one bullet, not one per sentence.
         - Specific & self-contained: meaningful even read in isolation.
         - Substance over recap: capture the WHY / position / trade-off
           rather than restating surface phrasing.
+        - If two candidate bullets restate the same idea from different
+          angles, emit ONE.
         - Max \(bulletLimit) words per bullet.\(sectionCap)
         - Transcript lines look like `[SpeakerLabel] ...`. When a specific
           speaker's perspective is the substance of a bullet, prefix the
@@ -735,19 +744,30 @@ enum SummaryPrompt {
         REQUIRED top-level shape:
         {"sections":[{"title":string,"bullets":[string]}]}
 
-        Your job is consolidation, NOT re-extraction:
+        Your job is consolidation, NOT re-extraction. Lean toward
+        FEWER bullets and FEWER sections — a Notion-style summary
+        targets ~5 sections with ~3 bullets each, not exhaustive
+        coverage of every line:
         - Merge bullets that say the same thing in different words into
           ONE concise bullet (e.g. "リリースは Q3" + "Q3 にリリース予定"
           → "リリースは Q3").
         - Combine closely related bullets within the same section into a
-          single more concise bullet when it reads more clearly.
+          single more concise bullet — even when the original phrasings
+          differ noticeably, prefer one well-worded combined bullet over
+          two narrow ones.
         - Drop redundancy ACROSS sections too — a point should appear in
           exactly one place.
+        - Drop bullets that are mostly filler, recap of previous bullets,
+          or surface phrasing without substance.
         - Empty sections get dropped.
+        - If a section has only 1 bullet that fits naturally under
+          another section, merge them and drop the title.
 
         HARD constraints:
-        - PRESERVE ALL distinct factual information. When in doubt, leave
-          two bullets separate. Losing facts is worse than redundancy.
+        - PRESERVE the substance of all distinct factual information.
+          Merging two bullets is fine; silently DROPPING a fact is not.
+          When merging, the combined bullet must still carry both pieces
+          of information.
         - DO NOT invent new content. You only see the summary, not the
           transcript — any new bullet you produce must be derivable from
           the bullets you were given.
@@ -792,6 +812,15 @@ enum SummaryPrompt {
         REQUIRED top-level shape:
         {"sections":[{"title":string,"bullets":[string]}]}
 
+        TARGET SHAPE (very important):
+        - Aim for ~3–5 sections total.
+        - Aim for ~2–5 bullets per section.
+        - Total bullets across the whole summary should be ~10–15 for
+          a typical meeting. Tight, distilled, scannable — the reader
+          shouldn't have to scroll the summary pane.
+        - If the discussion is short, fewer sections / bullets is
+          correct. Don't pad.
+
         Section structure (Notion-style):
         - Organize bullets under topical sections reflecting what was
           actually discussed (e.g. "プロジェクトX 進捗", "採用方針",
@@ -802,10 +831,13 @@ enum SummaryPrompt {
           live elsewhere. The summary is the DISCUSSION, not the
           extracted to-dos.
 
-        Bullet quality (Notion-style granularity):
-        - Atomic: one fact / point per bullet.
+        Bullet quality (Notion-style granularity — favor FEWER, BROADER
+        bullets over many narrow ones):
+        - One substantive thread per bullet — multiple sentences on the
+          same idea collapse into one bullet, not one per sentence.
         - Specific & self-contained: meaningful even read in isolation.
-        - Substance over recap: capture the WHY / context / trade-offs.
+        - Substance over recap: capture the WHY / context / trade-offs
+          rather than restating who said what.
         - Skip small talk, greetings, and filler.
         - Skip restating content that should live in Decisions / Actions
           / Questions / Topics.
