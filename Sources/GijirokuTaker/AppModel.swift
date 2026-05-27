@@ -783,14 +783,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Generates a short meeting title via the LLM and prefixes it with the
-    /// session date (yyyy-MM-dd). The date is always present even when the
-    /// LLM call fails, per the user requirement.
+    /// Generates a short meeting title via the LLM. The session start date
+    /// already shows in the sidebar's secondary line, so embedding it in
+    /// the title produces redundant `2026-05-27 2026-05-27 …` strings —
+    /// kept as a plain content title here and let the chrome render the
+    /// date.
     private func generateTitle(transcript: [TranscriptSegment]) async -> String {
-        let datePrefix = Self.dateFormatter.string(from: sessionStartedAt)
         let fallback = L10n.string("meeting.default_title")
         guard !transcript.isEmpty, let client else {
-            return "\(datePrefix) \(fallback)"
+            return fallback
         }
         // Cap the prompt: send a head and tail snippet so the model has both
         // the opening topic and any concluding decisions to work from.
@@ -815,10 +816,10 @@ final class AppModel: ObservableObject {
                 maxTokens: 60
             )
             let cleaned = sanitizeTitle(raw)
-            return cleaned.isEmpty ? "\(datePrefix) \(fallback)" : "\(datePrefix) \(cleaned)"
+            return cleaned.isEmpty ? fallback : cleaned
         } catch {
             logger.error("Title generation failed: \(error.localizedDescription, privacy: .public)")
-            return "\(datePrefix) \(fallback)"
+            return fallback
         }
     }
 
@@ -844,12 +845,6 @@ final class AppModel: ObservableObject {
         if t.count > 40 { t = String(t.prefix(40)) }
         return t
     }
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
 
     /// Minimum wall-clock interval between accepted heading insertions.
     /// Acts as a low-pass filter so the section structure stays
