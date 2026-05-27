@@ -70,6 +70,14 @@ public enum MLXModelCatalog {
         .init(id: "mlx-community/gemma-4-e2b-it-4bit", displayName: "Gemma 4 E2B IT 4bit", backend: .mlx, sizeEstimate: "~3.3 GB"),
         // Mid (~4–6 GB, better quality, well-supported by MLX swift)
         .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen2.5 7B Instruct 4bit", backend: .mlx, sizeEstimate: "~4.2 GB"),
+        // Gemma 4 E4B IT 4bit. Same Gemma4ForConditionalGeneration
+        // architecture as E2B above — added on the assumption that the
+        // shared loader path means E4B works wherever E2B works. If
+        // mlx-swift-lm starts choking on it specifically, demote to
+        // experimental or drop. Physical weights ~5B+ → ~4.9 GB at 4bit
+        // (per safetensors index), not 4 GB despite the "4B effective"
+        // label.
+        .init(id: "mlx-community/gemma-4-e4b-it-4bit", displayName: "Gemma 4 E4B IT 4bit", backend: .mlx, sizeEstimate: "~4.9 GB"),
         .init(id: "mlx-community/gemma-2-9b-it-4bit", displayName: "Gemma 2 9B IT 4bit", backend: .mlx, sizeEstimate: "~5.4 GB"),
         // Large (Apple Silicon + 32 GB+ unified memory)
         .init(id: "mlx-community/Qwen2.5-14B-Instruct-4bit", displayName: "Qwen2.5 14B Instruct 4bit", backend: .mlx, sizeEstimate: "~8.2 GB"),
