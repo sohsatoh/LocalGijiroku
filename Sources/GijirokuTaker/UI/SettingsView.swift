@@ -272,6 +272,18 @@ struct SettingsView: View {
             Toggle(L10n.string("settings.vad"), isOn: $settings.vadEnabled)
             Toggle(L10n.string("settings.diarization"), isOn: $settings.diarizationEnabled)
 
+            if settings.diarizationEnabled {
+                Picker(L10n.string("settings.speaker_count"), selection: $settings.speakerCount) {
+                    Text(loc: "settings.speaker_count.auto").tag(0)
+                    ForEach(1...10, id: \.self) { n in
+                        Text(L10n.format("settings.speaker_count.n_format", n)).tag(n)
+                    }
+                }
+                Text(loc: "settings.speaker_count_caption")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack {
                 Picker(L10n.string("settings.input_device"), selection: $settings.preferredInputDeviceUID) {
                     Text(loc: "settings.input_default").tag("")

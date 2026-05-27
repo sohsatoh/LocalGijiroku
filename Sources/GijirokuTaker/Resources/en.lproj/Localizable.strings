@@ -125,6 +125,10 @@
 "settings.bleed_dedup_caption" = "Speaker-meeting safe: when the meeting audio comes out of the speakers and bleeds back into the mic, any microphone segment matching a system-audio segment is dropped automatically. Apple's VoiceProcessingIO is not used, so hitting Start never ducks your speaker output.";
 "settings.vad_caption" = "With Voice Activity Detection enabled, audio is split at silence boundaries before being passed to Whisper. This prevents segment cuts in the middle of a sentence and produces meeting-friendly chunking. Disable only if you need to capture very quiet speech that the energy threshold rejects.";
 "settings.diarization_caption" = "Speaker diarization uses SpeakerKit (Pyannote, CoreML) to attach a speaker label to each transcript segment. Downloads ~30 MB on first use. CPU/GPU usage rises noticeably for long meetings. Labels are stabilized across rolling windows by time overlap, but extended silence may cause a speaker to be re-assigned.";
+"settings.speaker_count" = "Number of speakers";
+"settings.speaker_count.auto" = "Auto";
+"settings.speaker_count.n_format" = "%d";
+"settings.speaker_count_caption" = "Fix the number of speakers Pyannote should find. When you know the exact headcount, setting this value stabilizes clustering in short rolling windows. Leave on Auto when the count is unknown.";
 
 /* === Settings: Templates === */
 "settings.template_caption" = "These settings become the default for every project. Each project and each individual session may override them.";

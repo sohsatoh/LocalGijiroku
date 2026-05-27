@@ -125,6 +125,10 @@
 "settings.bleed_dedup_caption" = "スピーカー会議でも安心: スピーカーから出ている会議相手の声がマイクに回り込んだ場合は、システム音声側の transcript と内容が一致する mic セグメントを自動で重複排除します。Apple VoiceProcessingIO は使わない設計なので、Start を押してもスピーカー出力が ducking で小さくなることはありません。";
 "settings.vad_caption" = "Voice Activity Detection を有効にすると、Whisper に渡す前に音声を「発話あり」区間で先に切り分けます。会議のように沈黙が混じる音声でセグメントが文の途中で切れる問題を抑え、議事録らしい区切りになります。極端に静かな発話まで拾いたい場合のみ OFF を検討。";
 "settings.diarization_caption" = "話者分離は SpeakerKit (Pyannote, CoreML) で各 transcript セグメントに speaker ラベルを付与します。初回 ON 時に segmentation + embedding モデル (~30MB) を DL。CPU/GPU 負荷が増えるので録音が長いと遅延しがち。ローリング窓の時間重複でラベルを安定化していますが、長い沈黙を挟むと再アサインされる可能性があります。";
+"settings.speaker_count" = "話者人数";
+"settings.speaker_count.auto" = "自動";
+"settings.speaker_count.n_format" = "%d 人";
+"settings.speaker_count_caption" = "Pyannote が検出する話者数を固定します。会議の参加人数が分かっている場合に設定すると、短いローリング窓でのクラスタリングが安定します。不明な場合は「自動」のままにしてください。";
 
 /* === Settings: Templates === */
 "settings.template_caption" = "ここで設定した内容が全プロジェクトの初期値になります。各プロジェクトおよび個別セッションで上書きできます。";
