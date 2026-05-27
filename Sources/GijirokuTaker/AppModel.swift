@@ -664,6 +664,12 @@ final class AppModel: ObservableObject {
                 self.statusMessage = L10n.string("status.starting_audio")
                 let audioStream = try await engine.start()
                 self.statusMessage = L10n.string("status.loading_model")
+                // On first launch WhisperKit downloads ~626 MB before it can
+                // transcribe. Await preload so "loading_model" status persists
+                // until the model is ready — without this the status flips to
+                // "recording" immediately and the user sees no transcript with
+                // no explanation why.
+                try await transcriber.preload()
                 let segmentStream = transcriber.transcribe(audioStream)
                 self.statusMessage = L10n.string("status.recording")
                 for await segment in segmentStream {
