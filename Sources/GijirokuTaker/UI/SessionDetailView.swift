@@ -34,6 +34,7 @@ struct SessionDetailView: View {
                         // Saved sessions have no live tail — recording is
                         // long done. Pass an empty map.
                         liveTail: [:],
+                        headings: session.headings,
                         // For saved sessions, "diarization enabled" can be
                         // inferred from the data itself: if any segment has a
                         // speaker label, the session was diarized.

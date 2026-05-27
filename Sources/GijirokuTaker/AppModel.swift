@@ -27,6 +27,11 @@ final class AppModel: ObservableObject {
     @Published var liveTail: [AudioSource: TranscriptSegment] = [:]
     @Published var summary: CumulativeSummary = CumulativeSummary()
     @Published var events: [MeetingEvent] = []
+    /// Live section headings the meeting has produced, oldest first.
+    /// Inserted into the transcript view in chronological position by
+    /// `TranscriptPane`; serialized into the saved `Session` on Stop so
+    /// reopening a recording preserves the topic structure.
+    @Published var headings: [TranscriptHeading] = []
     @Published var statusMessage: String = L10n.string("status.idle")
     @Published var summaryProgress: SummaryProgress = .idle
     @Published var micWaveform = WaveformChannelState()
@@ -57,6 +62,7 @@ final class AppModel: ObservableObject {
     private var summaryEngine: SummaryEngine?
     private var eventExtractor: EventExtractor?
     private var agendaSuggester: AgendaSuggester?
+    private var headingDetector: TopicHeadingDetector?
     private var transcriptionEngine: WhisperTranscription?
     private var captureEngine: AudioCaptureEngine?
 
@@ -153,7 +159,8 @@ final class AppModel: ObservableObject {
             // recovery path treats the draft as authoritative.
             transcript: confirmedTranscript,
             summary: summary,
-            events: events
+            events: events,
+            headings: headings
         )
         do {
             try draftStore.save(draft)
@@ -255,6 +262,12 @@ final class AppModel: ObservableObject {
         )
         self.agendaSuggester = agendaSuggester
 
+        let headingDetector = TopicHeadingDetector(
+            client: llm,
+            config: .init(model: llmModelID, language: language)
+        )
+        self.headingDetector = headingDetector
+
         let whisperLang = (whisperLangRaw == "auto") ? nil : whisperLangRaw
         let transcription = WhisperTranscription(
             config: .init(
@@ -270,6 +283,7 @@ final class AppModel: ObservableObject {
         liveTail.removeAll()
         summary = CumulativeSummary()
         events.removeAll()
+        headings.removeAll()
         pendingForSummary.removeAll()
 
         // Persist an empty draft immediately so the session's existence is
@@ -497,6 +511,30 @@ final class AppModel: ObservableObject {
             logger.error("Summary error: \(error.localizedDescription, privacy: .public)")
             summaryProgress = .failed(message: error.localizedDescription)
         }
+        // Heading detection rides on the same cadence. We deliberately
+        // do this AFTER the summary state has already been promoted to
+        // .done so a heading parse failure can't roll back the user-
+        // visible summary progress. Same constraint applies: the model
+        // sees only the just-flushed window, never the full transcript.
+        if let headingDetector, !segments.isEmpty {
+            do {
+                let decision = try await headingDetector.detect(
+                    previousHeading: headings.last,
+                    recentSegments: segments
+                )
+                if decision.changed, let text = decision.heading {
+                    // Anchor at the earliest segment of the window so
+                    // the heading appears immediately above the speech
+                    // that introduced the new topic.
+                    let anchor = segments.min(by: { $0.startTime < $1.startTime })?.startTime
+                        ?? .now
+                    headings.append(TranscriptHeading(text: text, startTime: anchor))
+                    logger.info("flushSummaryWindow: new heading=\(text, privacy: .public)")
+                }
+            } catch {
+                logger.error("Heading detection failed (continuing): \(error.localizedDescription, privacy: .public)")
+            }
+        }
         // Snapshot to disk now that summary + events are in their freshest
         // state — the autosave loop runs on its own 30 s cadence but
         // catching the moment right after a successful LLM turn means a
@@ -633,7 +671,8 @@ final class AppModel: ObservableObject {
             endedAt: .now,
             transcript: finalTranscript,
             summary: summary,
-            events: events
+            events: events,
+            headings: headings
         )
         do {
             try sessionStore.save(session)
@@ -668,6 +707,7 @@ final class AppModel: ObservableObject {
         liveTail.removeAll()
         summary = CumulativeSummary()
         events.removeAll()
+        headings.removeAll()
         pendingForSummary.removeAll()
     }
 

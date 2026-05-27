@@ -86,6 +86,7 @@ struct RecordingView: View {
                 TranscriptPane(
                     segments: model.transcript,
                     liveTail: model.liveTail,
+                    headings: model.headings,
                     showDiarizationPlaceholder: model.diarizationEnabled,
                     layoutMode: settings.transcriptLayoutMode,
                     fontSize: CGFloat(settings.paneFontSize)
@@ -186,6 +187,7 @@ struct RecordingView: View {
 struct TranscriptPane: View {
     let segments: [TranscriptSegment]
     let liveTail: [AudioSource: TranscriptSegment]
+    var headings: [TranscriptHeading] = []
     var showDiarizationPlaceholder: Bool = false
     var layoutMode: TranscriptLayoutMode = .rows
     var fontSize: CGFloat = 13
@@ -228,18 +230,35 @@ struct TranscriptPane: View {
         TranscriptTurnGrouping.turns(from: segments, liveTail: liveTail)
     }
 
+    /// Interleave headings with segments (rows mode), sorted by
+    /// `startTime`. Heading items get a stable identity tied to their
+    /// UUID so SwiftUI diffs cleanly when a new heading slips into the
+    /// middle of the list.
+    private var rowItems: [TranscriptItem] {
+        var items: [TranscriptItem] = headings.map { .heading($0) }
+        items.append(contentsOf: rowSegments.map { .segment($0) })
+        items.sort { $0.sortTime < $1.sortTime }
+        return items
+    }
+
+    /// Same idea for the turns layout — headings slot between turns by
+    /// `startTime`, so they read as section dividers in the speaker-turn
+    /// prose flow.
+    private var turnItems: [TranscriptItem] {
+        var items: [TranscriptItem] = headings.map { .heading($0) }
+        items.append(contentsOf: turns.map { .turn($0) })
+        items.sort { $0.sortTime < $1.sortTime }
+        return items
+    }
+
     private var rowsBody: some View {
-        let items = rowSegments
+        let items = rowItems
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(items) { seg in
-                        TranscriptRow(
-                            segment: seg,
-                            showDiarizationPlaceholder: showDiarizationPlaceholder,
-                            fontSize: fontSize
-                        )
-                        .id(seg.id)
+                    ForEach(items) { item in
+                        rowItemView(item)
+                            .id(item.id)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -254,18 +273,33 @@ struct TranscriptPane: View {
         }
     }
 
+    @ViewBuilder
+    private func rowItemView(_ item: TranscriptItem) -> some View {
+        switch item {
+        case .heading(let h):
+            TranscriptHeadingRow(heading: h, fontSize: fontSize)
+        case .segment(let seg):
+            TranscriptRow(
+                segment: seg,
+                showDiarizationPlaceholder: showDiarizationPlaceholder,
+                fontSize: fontSize
+            )
+        case .turn:
+            // Unused in the rows layout — rowItems only mixes headings
+            // with segments. Switch is exhaustive so the compiler keeps
+            // both layouts honest about which item kinds they emit.
+            EmptyView()
+        }
+    }
+
     private var turnsBody: some View {
-        let items = turns
+        let items = turnItems
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(items) { turn in
-                        TranscriptTurnBlock(
-                            turn: turn,
-                            showDiarizationPlaceholder: showDiarizationPlaceholder,
-                            fontSize: fontSize
-                        )
-                        .id(turn.id)
+                    ForEach(items) { item in
+                        turnItemView(item)
+                            .id(item.id)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -277,13 +311,97 @@ struct TranscriptPane: View {
                     proxy.scrollTo(newValue, anchor: .bottom)
                 }
             }
-            .onChange(of: items.last?.liveTail?.text) { _, _ in
+            .onChange(of: items.compactMap(\.turnLiveTailText).last) { _, _ in
                 guard let id = items.last?.id else { return }
                 withAnimation(.easeOut(duration: 0.15)) {
                     proxy.scrollTo(id, anchor: .bottom)
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func turnItemView(_ item: TranscriptItem) -> some View {
+        switch item {
+        case .heading(let h):
+            TranscriptHeadingRow(heading: h, fontSize: fontSize)
+        case .turn(let turn):
+            TranscriptTurnBlock(
+                turn: turn,
+                showDiarizationPlaceholder: showDiarizationPlaceholder,
+                fontSize: fontSize
+            )
+        case .segment:
+            EmptyView()
+        }
+    }
+}
+
+/// Internal flat item used by TranscriptPane to interleave headings with
+/// either segments (rows mode) or turns (turns mode) under one
+/// chronologically sorted ForEach.
+private enum TranscriptItem: Identifiable {
+    case heading(TranscriptHeading)
+    case segment(TranscriptSegment)
+    case turn(TranscriptTurn)
+
+    var id: AnyHashable {
+        switch self {
+        case .heading(let h): return AnyHashable("heading-\(h.id.uuidString)")
+        case .segment(let s): return AnyHashable("seg-\(s.id.uuidString)")
+        case .turn(let t): return AnyHashable("turn-\(t.id.uuidString)")
+        }
+    }
+
+    var sortTime: Date {
+        switch self {
+        case .heading(let h): return h.startTime
+        case .segment(let s): return s.startTime
+        case .turn(let t): return t.startTime
+        }
+    }
+
+    /// Surface the unconfirmed-tail text only for turn items so the
+    /// turns body can observe live-tail edits without exposing the
+    /// rest of the case shape to the parent view.
+    var turnLiveTailText: String? {
+        if case .turn(let t) = self { return t.liveTail?.text }
+        return nil
+    }
+}
+
+/// Notion-style section divider: thin rule above + bold heading text.
+/// Heading text comes from the LLM in the meeting's language and
+/// scales with the user's pane font size, the same way speaker turn
+/// text does.
+private struct TranscriptHeadingRow: View {
+    let heading: TranscriptHeading
+    let fontSize: CGFloat
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(height: 0.5)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(heading.text)
+                    .font(.system(size: fontSize + 3, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                Text(Self.timeFormatter.string(from: heading.startTime))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+        }
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 }
 

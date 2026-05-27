@@ -33,6 +33,57 @@ private func tempDir() -> URL {
     #expect(loaded.events.first?.owner == "alice")
 }
 
+@Test func sessionDecoderDefaultsMissingHeadingsToEmpty() throws {
+    // Sessions written before the heading detector existed don't carry
+    // a `headings` field. The custom decoder must surface them with an
+    // empty array instead of throwing — otherwise the sidebar drops
+    // every legacy recording.
+    let id = UUID(uuidString: "00000000-0000-0000-0000-0000000000aa")!
+    let json = #"""
+    {
+      "id": "\#(id.uuidString)",
+      "title": "Legacy",
+      "startedAt": 700000000,
+      "transcript": [],
+      "summary": {"sections": [], "lastUpdated": 700000000},
+      "events": []
+    }
+    """#
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .deferredToDate
+    let session = try decoder.decode(Session.self, from: Data(json.utf8))
+    #expect(session.id == id)
+    #expect(session.title == "Legacy")
+    #expect(session.headings.isEmpty)
+}
+
+@Test func sessionRoundTripsHeadingsThroughCodable() throws {
+    let dir = tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = FileSessionStore(directory: dir)
+
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let original = Session(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000010")!,
+        title: "Heading test",
+        startedAt: now,
+        endedAt: now.addingTimeInterval(120),
+        transcript: [],
+        summary: CumulativeSummary(),
+        events: [],
+        headings: [
+            TranscriptHeading(text: "市場分析", startTime: now),
+            TranscriptHeading(text: "価格戦略", startTime: now.addingTimeInterval(60)),
+        ]
+    )
+
+    try store.save(original)
+    let loaded = try #require(try store.load(id: original.id))
+    #expect(loaded.headings.count == 2)
+    #expect(loaded.headings.map(\.text) == ["市場分析", "価格戦略"])
+    #expect(loaded.headings.last?.startTime == now.addingTimeInterval(60))
+}
+
 @Test func listReturnsSavedSessionsNewestFirst() throws {
     let dir = tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
