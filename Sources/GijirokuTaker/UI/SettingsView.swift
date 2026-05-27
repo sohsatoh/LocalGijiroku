@@ -320,6 +320,11 @@ struct SettingsView: View {
             Text(loc: "settings.summary_interval_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Toggle(L10n.string("settings.heading_detection"), isOn: $settings.headingDetectionEnabled)
+            Text(loc: "settings.heading_detection_caption")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

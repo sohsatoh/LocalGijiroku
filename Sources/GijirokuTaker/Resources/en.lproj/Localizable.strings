@@ -132,6 +132,8 @@
 /* === Settings: Advanced === */
 "settings.summary_interval_format" = "Summary update interval: %d s";
 "settings.summary_interval_caption" = "Too short and Ollama / MLX inference cannot keep up. 30–60 s recommended.";
+"settings.heading_detection" = "Auto-insert topic headings";
+"settings.heading_detection_caption" = "On every summary turn the LLM checks whether the topic shifted and inserts a Notion-style heading into the transcript. Costs one extra LLM call per turn — turn off on slower models if responsiveness matters.";
 
 /* === Style editor === */
 "style.user_label" = "User (global default)";

@@ -516,7 +516,10 @@ final class AppModel: ObservableObject {
         // .done so a heading parse failure can't roll back the user-
         // visible summary progress. Same constraint applies: the model
         // sees only the just-flushed window, never the full transcript.
-        if let headingDetector, !segments.isEmpty {
+        // Gated on a Settings toggle because the extra LLM call adds
+        // measurable latency on slower models — users who don't want
+        // headings shouldn't pay for them.
+        if settings.headingDetectionEnabled, let headingDetector, !segments.isEmpty {
             do {
                 let decision = try await headingDetector.detect(
                     previousHeading: headings.last,

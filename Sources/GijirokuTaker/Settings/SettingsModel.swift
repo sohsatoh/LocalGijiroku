@@ -26,6 +26,7 @@ final class SettingsModel: ObservableObject {
         static let paneMarkdownMode = "paneMarkdownMode"
         static let transcriptDisplayMode = "transcriptDisplayMode"
         static let transcriptFontSize = "transcriptFontSize"
+        static let headingDetectionEnabled = "headingDetectionEnabled"
     }
 
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
@@ -83,6 +84,11 @@ final class SettingsModel: ObservableObject {
     /// key so a user who set it before this setting broadened to all
     /// panes keeps their value. Range clamped via the Settings slider.
     @AppStorage(Keys.transcriptFontSize) var paneFontSize: Double = 13
+    /// Auto-insert Notion-style section headings into the live transcript
+    /// as the meeting moves between topics. Adds one extra LLM call per
+    /// summary loop turn — slower models or constrained machines can
+    /// disable it without affecting summary / event extraction.
+    @AppStorage(Keys.headingDetectionEnabled) var headingDetectionEnabled: Bool = true
 
     var userSummaryStyle: SummaryStyle {
         guard !userSummaryStyleJSON.isEmpty,
