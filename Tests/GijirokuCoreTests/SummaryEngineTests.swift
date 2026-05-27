@@ -104,6 +104,49 @@ import Foundation
     #expect(updates.isEmpty)
 }
 
+@Test func parseUpdatesRepairsBracketSwapMalformedFromSmallModel() throws {
+    // Real-world failure from a small LLM: it wrote `}` instead of `]`
+    // after the last bullet, leaving the bullets array unclosed inside
+    // an already-closed object. The repair pass swaps the trailing
+    // bracket trio `}]}` to `]}]` and appends a closing `}` to balance.
+    let broken = #"""
+    {"updates":[{"section":"坂市総理面会内容","bullets":["細かいチェックが難しいと感じられる","プライバシーの考慮が必須である","セキュリティ上の脆弱性は専門家に確認を依頼すべき","リリース前にセキュリティデビュー用エージェントを実行させる"}]}
+    """#
+    let updates = try SummaryEngine.parseUpdates(response: broken)
+    #expect(updates.count == 1)
+    #expect(updates[0].section == "坂市総理面会内容")
+    #expect(updates[0].bullets.count == 4)
+    #expect(updates[0].bullets.first == "細かいチェックが難しいと感じられる")
+}
+
+@Test func parseUpdatesRepairsTruncatedTail() throws {
+    // Token-limit truncation: LLM ran out of budget mid-output. Missing
+    // the final `]}` to close the bullets array + outer object.
+    let truncated = #"{"updates":[{"section":"X","bullets":["a","b","c""#
+    let updates = try SummaryEngine.parseUpdates(response: truncated)
+    #expect(updates.count == 1)
+    #expect(updates[0].bullets == ["a", "b", "c"])
+}
+
+@Test func repairUnbalancedJSONLeavesValidUnchanged() {
+    let valid = #"{"updates":[{"section":"X","bullets":["a"]}]}"#
+    let result = SummaryEngine.repairUnbalancedJSON(valid)
+    #expect(result == valid)
+}
+
+@Test func repairUnbalancedJSONSwapsTrailingBracketMistake() {
+    let broken = #"{"updates":[{"section":"X","bullets":["a","b"}]}"#
+    let result = SummaryEngine.repairUnbalancedJSON(broken)
+    #expect(result == #"{"updates":[{"section":"X","bullets":["a","b"]}]}"#)
+}
+
+@Test func repairUnbalancedJSONReturnsNilOnExtraClosers() {
+    // Unsalvageable: more closing brackets than openers. Don't guess.
+    let garbled = #"{"x":1}}}"#
+    let result = SummaryEngine.repairUnbalancedJSON(garbled)
+    #expect(result == nil)
+}
+
 @Test func applyUpdatesAppendsToExistingSectionByTitle() {
     let existing = CumulativeSummary(sections: [
         .init(title: "プロジェクトX 進捗", bullets: ["初期計画固まる"]),

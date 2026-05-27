@@ -51,17 +51,25 @@ private func event(_ text: String, kind: MeetingEvent.Kind = .action, owner: Str
     #expect(list[0].text.contains("することに決めました"))
 }
 
-@Test func wordingShiftBeyondPrefixIsTreatedAsNew() {
-    let merger = EventMerger(config: .init(keyPrefixLength: 10))
-    var list = [event("hello world this is event one")]
-    merger.merge([event("hello world but a totally different event")], into: &list)
-    // 同じ prefix で keyed なので、prefix が短い設定だと衝突する。
-    // 長めの prefix で別物として扱われる挙動の確認は別ケース。
+@Test func nearDuplicateWithOneCharDriftIsDeduped() {
+    // The real failure mode the user reported: Whisper transcribed the
+    // same question two different ways across cycles ("リテラシー" vs
+    // "リテラー"). The old prefix-key dedup missed this because the keys
+    // diverged at char 6; the new directional bigram check keeps them
+    // merged.
+    let merger = EventMerger()
+    var list = [event("個人のリテラシーとしてどこまで自分で理解すべきか", kind: .question)]
+    merger.merge([
+        event("個人のリテラーとしてどこまで自分で理解すべきか", kind: .question),
+    ], into: &list)
     #expect(list.count == 1)
 }
 
-@Test func longPrefixSeparatesUnrelatedEvents() {
-    let merger = EventMerger(config: .init(keyPrefixLength: 60))
+@Test func unrelatedEventsBothKept() {
+    // Two genuinely different action items must stay separate even when
+    // they share a leading verb. The similarity check sits below the
+    // threshold for these.
+    let merger = EventMerger()
     var list = [event("Send the quarterly report to the executive team")]
     merger.merge([event("Send the design draft to the marketing team")], into: &list)
     #expect(list.count == 2)

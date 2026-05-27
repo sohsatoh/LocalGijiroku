@@ -4,16 +4,33 @@ import Foundation
 /// folding duplicates and upgrading entries when newer extractions add
 /// detail (owner, due date) for an event that was already recorded.
 ///
-/// Identity is keyed on `(kind, first-N-chars of normalized text)`. The
-/// extractor tends to re-emit the same decision/action across multiple
-/// summary cycles with minor wording shifts, so a fuzzy key keeps the
-/// resulting list from ballooning.
+/// Identity is decided by `(kind, similarityCheck)`:
+///   - same `kind`, AND
+///   - one of: strict containment, or directional bigram overlap ≥
+///     `similarityThreshold` (default 0.7)
+///
+/// The directional bigram check is what catches the real-world failure
+/// mode the original "first-N-chars normalized key" missed: Whisper
+/// transcribed the same word two different ways across cycles
+/// ("リテラシー" vs "リテラー"), the prefix keys diverged at character 6,
+/// and the deduper appended a second event for the same content.
 public struct EventMerger {
     public struct Config: Sendable {
-        public var keyPrefixLength: Int
+        /// Char-bigram directional overlap threshold for treating two
+        /// same-kind events as the same. The "smaller" side has to have
+        /// ≥ this fraction of its bigrams present in the longer side.
+        public var similarityThreshold: Float
+        /// Below this bigram count on the shorter side, fall back to
+        /// substring containment only — prevents spurious 1-shared-bigram
+        /// matches between very short events.
+        public var minBigramsForSimilarity: Int
 
-        public init(keyPrefixLength: Int = 20) {
-            self.keyPrefixLength = keyPrefixLength
+        public init(
+            similarityThreshold: Float = 0.7,
+            minBigramsForSimilarity: Int = 4
+        ) {
+            self.similarityThreshold = similarityThreshold
+            self.minBigramsForSimilarity = minBigramsForSimilarity
         }
     }
 
@@ -25,8 +42,7 @@ public struct EventMerger {
 
     public func merge(_ newEvents: [MeetingEvent], into existing: inout [MeetingEvent]) {
         for new in newEvents {
-            let newKey = key(for: new)
-            if let idx = existing.firstIndex(where: { key(for: $0) == newKey }) {
+            if let idx = findMatch(for: new, in: existing) {
                 existing[idx] = Self.merged(into: existing[idx], from: new)
             } else {
                 existing.append(new)
@@ -34,10 +50,48 @@ public struct EventMerger {
         }
     }
 
-    public func key(for event: MeetingEvent) -> String {
-        let normalized = Self.normalize(event.text)
-        let prefix = String(normalized.prefix(config.keyPrefixLength))
-        return "\(event.kind.rawValue)|\(prefix)"
+    private func findMatch(for event: MeetingEvent, in list: [MeetingEvent]) -> Int? {
+        let needleBigrams = Self.charBigrams(of: Self.normalize(event.text))
+        for (idx, candidate) in list.enumerated() {
+            guard candidate.kind == event.kind else { continue }
+            if Self.isSameContent(
+                event.text,
+                candidate.text,
+                aBigrams: needleBigrams,
+                threshold: config.similarityThreshold,
+                minBigrams: config.minBigramsForSimilarity
+            ) {
+                return idx
+            }
+        }
+        return nil
+    }
+
+    /// Two event texts likely describe the same agenda item / question /
+    /// decision / action. Tries (in order):
+    ///   1. Normalized equality.
+    ///   2. Strict substring containment in either direction (Whisper
+    ///      extended or truncated the text across cycles).
+    ///   3. Directional bigram containment on the SHORTER side ≥ threshold.
+    ///      Catches single-character drift like リテラシー → リテラー.
+    static func isSameContent(
+        _ a: String,
+        _ b: String,
+        aBigrams: Set<String>? = nil,
+        threshold: Float,
+        minBigrams: Int
+    ) -> Bool {
+        let na = normalize(a)
+        let nb = normalize(b)
+        if na == nb { return true }
+        if na.isEmpty || nb.isEmpty { return false }
+        if na.contains(nb) || nb.contains(na) { return true }
+        let aSet = aBigrams ?? charBigrams(of: na)
+        let bSet = charBigrams(of: nb)
+        let smaller = min(aSet.count, bSet.count)
+        guard smaller >= minBigrams else { return false }
+        let inter = aSet.intersection(bSet).count
+        return Float(inter) / Float(smaller) >= threshold
     }
 
     /// Merges `incoming` into `current`, keeping the original `id` /
@@ -72,5 +126,20 @@ public struct EventMerger {
             .replacingOccurrences(of: "　", with: " ")
             .replacingOccurrences(of: "  ", with: " ")
             .lowercased()
+    }
+
+    /// Character bigram set. Used for the directional containment check —
+    /// works the same way as `TranscriptDeduper.charBigrams` but kept
+    /// private to this type so the events layer has no cross-module
+    /// dependency.
+    static func charBigrams(of s: String) -> Set<String> {
+        let chars = Array(s)
+        guard chars.count >= 2 else { return [] }
+        var set: Set<String> = []
+        set.reserveCapacity(chars.count - 1)
+        for i in 0..<(chars.count - 1) {
+            set.insert(String(chars[i...(i + 1)]))
+        }
+        return set
     }
 }

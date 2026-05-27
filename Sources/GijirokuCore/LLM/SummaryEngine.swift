@@ -145,14 +145,16 @@ public actor SummaryEngine {
             language: config.language,
             style: config.style
         )
-        // 600 tokens is enough for a single turn's worth of new bullets
-        // (typically 1-3 sections × 1-3 bullets each). Tight cap = fast
-        // turn-around even on small local models.
+        // 1500 tokens — Japanese tokenizes densely (1-3 tokens per char
+        // on most BPE vocabs), so 4-6 bullets of meaningful content can
+        // blow a 600-token budget mid-output and the truncated JSON
+        // surfaces as a parse error every turn. The latency hit is small
+        // for short responses (LLMs stop on EOS, not maxTokens).
         let response = try await client.chat(
             model: config.model,
             messages: messages,
             format: Self.updatesResponseFormat,
-            maxTokens: 600
+            maxTokens: 1500
         )
         fputs("[SummaryEngine] appendDelta response length=\(response.count)\n", stderr)
         do {
@@ -301,19 +303,102 @@ public actor SummaryEngine {
         if response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw LLMParseError.emptyResponse
         }
-        guard let jsonString = firstBalancedJSONValue(in: response) else {
+        let candidate = firstBalancedJSONValue(in: response)
+            ?? stripThinkBlocks(stripJSONFences(response)) // last-ditch: try the raw stripped text
+        guard !candidate.isEmpty else {
             throw LLMParseError.noJSONObject(rawSnippet: LLMParseError.snippet(of: response))
         }
-        guard let root = try? JSONSerialization.jsonObject(
-            with: Data(jsonString.utf8),
+        // Try strict JSONSerialization first. If that fails, attempt a
+        // bracket-balance repair pass that targets the most common
+        // malformed-JSON pattern we see from small LLMs: a `}` where a
+        // `]` was meant (so a containing array stays open while the
+        // outer object closes), or trailing unclosed brackets from a
+        // truncated output.
+        if let root = try? JSONSerialization.jsonObject(
+            with: Data(candidate.utf8),
             options: [.fragmentsAllowed]
-        ) else {
-            throw LLMParseError.jsonDecodeFailed(
-                reason: "not valid JSON",
-                rawSnippet: LLMParseError.snippet(of: jsonString)
-            )
+        ) {
+            return JSONCoercer.coerceUpdates(root)
         }
-        return JSONCoercer.coerceUpdates(root)
+        if let repaired = repairUnbalancedJSON(candidate),
+           let root = try? JSONSerialization.jsonObject(
+               with: Data(repaired.utf8),
+               options: [.fragmentsAllowed]
+           ) {
+            return JSONCoercer.coerceUpdates(root)
+        }
+        throw LLMParseError.jsonDecodeFailed(
+            reason: "not valid JSON",
+            rawSnippet: LLMParseError.snippet(of: candidate)
+        )
+    }
+
+    /// Best-effort JSON repair for the malformed shapes small local LLMs
+    /// most often produce. Returns nil when the input is malformed beyond
+    /// simple bracket bookkeeping.
+    ///
+    /// Tracks bracket nesting with a stack and handles two patterns:
+    ///
+    ///   1. **Bracket-swap mismatches**: the LLM wrote `}` while an
+    ///      enclosing array is still open (or `]` while an object is
+    ///      open). Swap the wrong character to the right one. Real
+    ///      example we hit from a small model:
+    ///        `{"updates":[{"section":"…","bullets":["a","b"}]}` —
+    ///      the `}` after the last bullet should have been `]`. The
+    ///      stack-based scan rewrites the trailing `}]}` to `]}]` and
+    ///      then appends the missing `}` to close the outer object.
+    ///
+    ///   2. **Truncated tail** (token-limit cutoff): the LLM emitted
+    ///      the opening brackets but ran out before closing them.
+    ///      Append closers in reverse nesting order to drain the stack.
+    ///
+    /// Strings (between unescaped `"`) are skipped so brackets in user
+    /// content don't confuse the bookkeeping.
+    static func repairUnbalancedJSON(_ s: String) -> String? {
+        var chars = Array(s)
+        var stack: [Character] = []
+        var inString = false
+        var escape = false
+        for i in 0..<chars.count {
+            let c = chars[i]
+            if escape { escape = false; continue }
+            if inString {
+                if c == "\\" { escape = true; continue }
+                if c == "\"" { inString = false }
+                continue
+            }
+            switch c {
+            case "\"": inString = true
+            case "{", "[":
+                stack.append(c)
+            case "}":
+                if stack.last == "{" {
+                    stack.removeLast()
+                } else if stack.last == "[" {
+                    // LLM wrote `}` where `]` was needed.
+                    chars[i] = "]"
+                    stack.removeLast()
+                } else {
+                    return nil // unmatched closer
+                }
+            case "]":
+                if stack.last == "[" {
+                    stack.removeLast()
+                } else if stack.last == "{" {
+                    // LLM wrote `]` where `}` was needed.
+                    chars[i] = "}"
+                    stack.removeLast()
+                } else {
+                    return nil
+                }
+            default: break
+            }
+        }
+        // Drain any still-open brackets, innermost first.
+        while let top = stack.popLast() {
+            chars.append(top == "{" ? "}" : "]")
+        }
+        return String(chars)
     }
 
     static func parse(response: String) throws -> CumulativeSummary {
