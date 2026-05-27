@@ -325,6 +325,11 @@ struct SettingsView: View {
             Text(loc: "settings.heading_detection_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Toggle(L10n.string("settings.agenda_suggestion"), isOn: $settings.agendaSuggestionEnabled)
+            Text(loc: "settings.agenda_suggestion_caption")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

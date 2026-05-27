@@ -134,6 +134,8 @@
 "settings.summary_interval_caption" = "短すぎると Ollama / MLX 推論が間に合わず重くなります。30〜60 秒推奨。";
 "settings.heading_detection" = "話題の見出しを自動挿入";
 "settings.heading_detection_caption" = "サマリ更新ごとに LLM が話題の変化を判定し、字幕に Notion 風の見出しを挿入します。LLM 呼び出しが 1 回増えるので、低速モデルでは OFF にできます。";
+"settings.agenda_suggestion" = "AI による話題提案";
+"settings.agenda_suggestion_caption" = "サマリ更新ごとに LLM が「議論しておくべきだが触れていない論点」をイベントペインに提案します。LLM 呼び出しが 1 回増えるので、低速モデルでは OFF にできます。";
 
 /* === Style editor === */
 "style.user_label" = "ユーザー (全体デフォルト)";

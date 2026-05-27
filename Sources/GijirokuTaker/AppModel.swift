@@ -487,8 +487,10 @@ final class AppModel: ObservableObject {
             // here MUST NOT poison the rest of the loop — extraction
             // already succeeded and we don't want to wipe its progress
             // because the suggester drifted in JSON shape. We pass only
-            // the latest window, never the full transcript.
-            if let agendaSuggester {
+            // the latest window, never the full transcript. Gated on a
+            // Settings toggle so users on slower models can skip the
+            // extra LLM call without losing summary or event extraction.
+            if settings.agendaSuggestionEnabled, let agendaSuggester {
                 do {
                     let openSuggestions = events.filter { $0.kind == .agendaSuggestion }
                     let recordedNonSuggestion = events.filter { $0.kind != .agendaSuggestion }

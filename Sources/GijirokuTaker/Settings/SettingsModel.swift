@@ -27,6 +27,7 @@ final class SettingsModel: ObservableObject {
         static let transcriptDisplayMode = "transcriptDisplayMode"
         static let transcriptFontSize = "transcriptFontSize"
         static let headingDetectionEnabled = "headingDetectionEnabled"
+        static let agendaSuggestionEnabled = "agendaSuggestionEnabled"
     }
 
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
@@ -89,6 +90,11 @@ final class SettingsModel: ObservableObject {
     /// summary loop turn — slower models or constrained machines can
     /// disable it without affecting summary / event extraction.
     @AppStorage(Keys.headingDetectionEnabled) var headingDetectionEnabled: Bool = true
+    /// Surface AI-proposed agenda items on each summary turn. Also adds
+    /// one LLM call per turn; independent toggle from heading detection
+    /// so users can pick whichever assistant-side reasoning they value
+    /// without paying for the other.
+    @AppStorage(Keys.agendaSuggestionEnabled) var agendaSuggestionEnabled: Bool = true
 
     var userSummaryStyle: SummaryStyle {
         guard !userSummaryStyleJSON.isEmpty,

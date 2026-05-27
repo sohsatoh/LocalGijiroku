@@ -134,6 +134,8 @@
 "settings.summary_interval_caption" = "Too short and Ollama / MLX inference cannot keep up. 30–60 s recommended.";
 "settings.heading_detection" = "Auto-insert topic headings";
 "settings.heading_detection_caption" = "On every summary turn the LLM checks whether the topic shifted and inserts a Notion-style heading into the transcript. Costs one extra LLM call per turn — turn off on slower models if responsiveness matters.";
+"settings.agenda_suggestion" = "AI agenda proposals";
+"settings.agenda_suggestion_caption" = "On every summary turn the LLM proposes angles the meeting hasn't covered yet, surfaced as Topic Proposals in the Events pane. Costs one extra LLM call per turn — turn off on slower models if responsiveness matters.";
 
 /* === Style editor === */
 "style.user_label" = "User (global default)";
