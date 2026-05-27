@@ -521,18 +521,41 @@ final class AppModel: ObservableObject {
         // Gated on a Settings toggle because the extra LLM call adds
         // measurable latency on slower models — users who don't want
         // headings shouldn't pay for them.
-        if settings.headingDetectionEnabled, let headingDetector, !segments.isEmpty {
+        //
+        // Cadence gate: don't run the detector again until enough wall-
+        // clock time has passed since the last accepted heading.
+        // Without this gate the model gets called every summary turn
+        // (30 s) and produces a new section heading every 1–2 turns,
+        // which feels noisy and breaks the "section" abstraction for
+        // the reader. 90 s ≈ three summary turns, which the user
+        // experiences as "headings change at a paragraph cadence,
+        // not a sentence cadence". Doesn't apply to the very first
+        // detection — getting the meeting started with a heading
+        // matters more than throttling does.
+        let withinHeadingCooldown: Bool = {
+            guard let last = headings.last else { return false }
+            return Date.now.timeIntervalSince(last.detectedAt) < AppModel.minHeadingIntervalSec
+        }()
+        if settings.headingDetectionEnabled,
+           !withinHeadingCooldown,
+           let headingDetector,
+           !segments.isEmpty {
             do {
                 let decision = try await headingDetector.detect(
                     previousHeading: headings.last,
                     recentSegments: segments
                 )
                 if decision.changed, let text = decision.heading {
-                    // Anchor at the earliest segment of the window so
-                    // the heading appears immediately above the speech
-                    // that introduced the new topic.
-                    let anchor = segments.min(by: { $0.startTime < $1.startTime })?.startTime
-                        ?? .now
+                    // Anchor strictly BEFORE the earliest segment of the
+                    // window so the heading sorts above the speech that
+                    // introduced the new topic. Using the segment's own
+                    // startTime would leave the order unstable —
+                    // chronological sort is not guaranteed stable across
+                    // equal keys, so the heading could end up below the
+                    // first sentence of the new section.
+                    let anchor = (segments.min(by: { $0.startTime < $1.startTime })?.startTime
+                        ?? .now)
+                        .addingTimeInterval(-0.001)
                     headings.append(TranscriptHeading(text: text, startTime: anchor))
                     logger.info("flushSummaryWindow: new heading=\(text, privacy: .public)")
                 }
@@ -827,4 +850,11 @@ final class AppModel: ObservableObject {
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
+
+    /// Minimum wall-clock interval between accepted heading insertions.
+    /// Acts as a low-pass filter so the section structure stays
+    /// paragraph-sized regardless of how trigger-happy the detector
+    /// gets on noisy mid-window content. See the call site in
+    /// `flushSummaryWindow` for the rationale on the 90 s value.
+    private static let minHeadingIntervalSec: TimeInterval = 90
 }

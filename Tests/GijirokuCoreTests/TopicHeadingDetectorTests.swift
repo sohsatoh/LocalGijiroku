@@ -76,3 +76,56 @@ import Foundation
     let user = messages.last?.content ?? ""
     #expect(user.contains("(none yet"))
 }
+
+// Smallest possible LLMClient stub: returns a canned response on the
+// first chat call. Plenty for actor unit tests that need to observe
+// what the actor *did* with whatever it got back.
+private actor StubLLMClient: LLMClient {
+    let canned: String
+    var callCount = 0
+    init(_ canned: String = "{\"changed\":false,\"heading\":null}") {
+        self.canned = canned
+    }
+    func chat(model: String, messages: [LLMMessage], format: LLMResponseFormat, maxTokens: Int) async throws -> String {
+        callCount += 1
+        return canned
+    }
+}
+
+@Test func detectorSkipsLLMCallWhenWindowTooSmallWithExistingHeading() async throws {
+    // With a previous heading, the bar to overwrite it is high — a
+    // 2-line tangent shouldn't trigger a new section. We assert the
+    // early return BEFORE the LLM gets called by inspecting the
+    // stub's call count.
+    let stub = StubLLMClient("{\"changed\":true,\"heading\":\"NOPE\"}")
+    let detector = TopicHeadingDetector(client: stub)
+    let now = Date()
+    let segments = [
+        TranscriptSegment(source: .microphone, text: "side note", startTime: now, endTime: now.addingTimeInterval(2), isFinal: true),
+        TranscriptSegment(source: .microphone, text: "and another", startTime: now.addingTimeInterval(3), endTime: now.addingTimeInterval(5), isFinal: true),
+    ]
+    let previous = TranscriptHeading(text: "Pricing", startTime: now.addingTimeInterval(-120))
+    let decision = try await detector.detect(previousHeading: previous, recentSegments: segments)
+    #expect(decision.changed == false)
+    #expect(decision.heading == nil)
+    let calls = await stub.callCount
+    #expect(calls == 0)
+}
+
+@Test func detectorAllowsLLMCallOnFirstDetectionWithTwoLines() async throws {
+    // The very first heading is allowed at the lower 2-line bar so
+    // that meetings get a heading once they actually start. With no
+    // previous heading the detector must reach the LLM.
+    let stub = StubLLMClient("{\"changed\":true,\"heading\":\"会議開始\"}")
+    let detector = TopicHeadingDetector(client: stub)
+    let now = Date()
+    let segments = [
+        TranscriptSegment(source: .microphone, text: "始めます", startTime: now, endTime: now.addingTimeInterval(2), isFinal: true),
+        TranscriptSegment(source: .microphone, text: "アジェンダから", startTime: now.addingTimeInterval(3), endTime: now.addingTimeInterval(5), isFinal: true),
+    ]
+    let decision = try await detector.detect(previousHeading: nil, recentSegments: segments)
+    #expect(decision.changed == true)
+    #expect(decision.heading == "会議開始")
+    let calls = await stub.callCount
+    #expect(calls == 1)
+}

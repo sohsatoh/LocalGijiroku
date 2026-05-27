@@ -82,10 +82,15 @@ public actor TopicHeadingDetector {
         recentSegments: [TranscriptSegment]
     ) async throws -> TopicHeadingDecision {
         let recent = Array(recentSegments.suffix(config.recentTranscriptLineCap))
-        // Need at least a couple of lines to judge a topic shift.
-        // A single line is just as easily a side comment as a real
-        // pivot — wait for more material before churning the heading.
-        guard recent.count >= 2 else {
+        // Need a few lines to judge a topic shift. One or two lines
+        // could just be a side comment, a clarifying question, or a
+        // brief tangent — calling that a new section makes the
+        // heading flow noisier than the transcript itself. 4 lines
+        // ≈ a real exchange between two people. Without an existing
+        // heading the bar is lower (we want SOME initial heading
+        // once the meeting starts moving) but still > 1 line.
+        let minimumLines = previousHeading == nil ? 2 : 4
+        guard recent.count >= minimumLines else {
             return TopicHeadingDecision(changed: false, heading: nil)
         }
         let transcript = TranscriptFormatting.toPromptLines(recent)
@@ -190,19 +195,42 @@ enum HeadingPrompt {
         Output JSON ONLY (no markdown fences, no prose):
         {"changed": boolean, "heading": string?}
 
-        Rules:
-        - Return changed=true ONLY when the topic clearly moved on. A
-          tangent of one or two lines is NOT a topic shift.
+        DEFAULT to changed=false. Section headings should change at a
+        paragraph-sized cadence — every few minutes — not every
+        sentence. The reader is using headings as table-of-contents
+        anchors, so churning them every turn destroys their value.
+
+        Return changed=true ONLY when ALL of the following hold:
+        - The new thread is clearly distinct from what the current
+          heading describes (different subject, not a deeper dive into
+          the same subject).
+        - The conversation has plausibly moved to that new thread for
+          good — multiple speakers engaged with it, not a single
+          comment.
+        - The current heading is genuinely stale, not merely
+          incomplete. "Pricing" doesn't need to become "Pricing
+          discount tiers" mid-discussion — the original still
+          describes the section.
+
+        Treat the following as NOT a topic shift (changed=false):
+        - One- or two-line tangents, clarifying questions, side
+          comments, recap statements, examples, definitions.
+        - Sub-topics that fit naturally under the current heading.
+        - Speaker handoffs without subject change.
+        - The same topic re-emerging after a brief detour.
+
+        Other rules:
         - When changed=false, set heading=null. Do not propose a heading
           you don't intend to use.
         - When changed=true, heading is a short noun-phrase title for
           the NEW thread, ≤ \(maxLen) characters, no trailing punctuation,
           no surrounding quotes. \(languageLine)
         - When the current heading is "(none yet)" and the transcript
-          has substantive content, return changed=true with a heading
-          for what the meeting is currently about.
-        - Be conservative: when in doubt, return changed=false. The
-          existing heading is the safer default than inventing churn.
+          has substantive content (multiple exchanges on something
+          concrete), return changed=true with a heading for what the
+          meeting is currently about.
+        - When in doubt, return changed=false. The existing heading is
+          the safer default.
         """
 
         let user = """
