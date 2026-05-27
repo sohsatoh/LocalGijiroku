@@ -580,16 +580,23 @@ final class AppModel: ObservableObject {
                     recentSegments: segments
                 )
                 if decision.changed, let text = decision.heading {
-                    // Anchor strictly BEFORE the earliest segment of the
-                    // window so the heading sorts above the speech that
-                    // introduced the new topic. Using the segment's own
-                    // startTime would leave the order unstable —
-                    // chronological sort is not guaranteed stable across
-                    // equal keys, so the heading could end up below the
-                    // first sentence of the new section.
-                    let anchor = (segments.min(by: { $0.startTime < $1.startTime })?.startTime
+                    // Anchor strictly AFTER the most recent segment of
+                    // the window so the heading divides "what was said
+                    // before this turn" from "what comes next". Using
+                    // the window's earliest segment placed the heading
+                    // at the start of the just-flushed window and
+                    // retroactively re-parented the entire window under
+                    // it — but those segments were still discussion of
+                    // the prior topic. The new heading represents the
+                    // pivot the LLM just observed; subsequent transcript
+                    // belongs under it. Adding 1 ms past the latest
+                    // segment's endTime guarantees the chronological
+                    // sort places the heading after every confirmed
+                    // segment currently on screen, regardless of
+                    // stable-sort behaviour on equal keys.
+                    let anchor = (segments.max(by: { $0.endTime < $1.endTime })?.endTime
                         ?? .now)
-                        .addingTimeInterval(-0.001)
+                        .addingTimeInterval(0.001)
                     headings.append(TranscriptHeading(text: text, startTime: anchor))
                     logger.info("flushSummaryWindow: new heading=\(text, privacy: .public)")
                 }
