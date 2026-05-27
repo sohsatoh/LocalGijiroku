@@ -58,19 +58,16 @@ public enum MLXModelCatalog {
         .init(id: "mlx-community/gemma-2-2b-it-4bit", displayName: "Gemma 2 2B IT 4bit", backend: .mlx, sizeEstimate: "~1.5 GB"),
         .init(id: "mlx-community/Llama-3.2-3B-Instruct-4bit", displayName: "Llama 3.2 3B Instruct 4bit", backend: .mlx, sizeEstimate: "~1.8 GB"),
         .init(id: "mlx-community/Qwen2.5-3B-Instruct-4bit", displayName: "Qwen2.5 3B Instruct 4bit", backend: .mlx, sizeEstimate: "~1.9 GB"),
-        // Experimental — Gemma 4 E2B IT 4bit. mlx-community ships it as
-        // `Gemma4ForConditionalGeneration` (text + audio + vision), and
-        // it's the most-downloaded gemma-4 variant on mlx-community.
-        // mlx-swift-lm support is UNVERIFIED — Gemma 3 hit a v_proj
-        // shape mismatch (see exclusion note below) and Gemma 4 may
-        // share the same path. Surfaced here so a real chat() call can
-        // tell us whether the loader handles it; if it doesn't, remove
-        // this entry and append it to the exclusion comment below.
-        .init(id: "mlx-community/gemma-4-e2b-it-4bit", displayName: "Gemma 4 E2B IT 4bit (experimental)", backend: .mlx, sizeEstimate: "~1.7 GB"),
         // Recommended default — Qwen3 Instruct-2507 is non-reasoning (no
         // `<think>` blocks), instruction-tuned, multilingual, and small
         // enough that the first-Start download is reasonable.
         .init(id: "mlx-community/Qwen3-4B-Instruct-2507-4bit", displayName: "Qwen3 4B Instruct (2507) 4bit", backend: .mlx, sizeEstimate: "~2.5 GB"),
+        // Gemma 4 E2B IT 4bit. Verified working with mlx-swift-lm 3.31
+        // (the architecture issue that excluded Gemma 3 doesn't reach
+        // this loader). The "E2B" suffix is Google's Per-Layer-
+        // Embeddings naming: physical weights are ~5B / ~3.3 GB at 4bit,
+        // not 2 GB despite the "2B effective" label.
+        .init(id: "mlx-community/gemma-4-e2b-it-4bit", displayName: "Gemma 4 E2B IT 4bit", backend: .mlx, sizeEstimate: "~3.3 GB"),
         // Mid (~4–6 GB, better quality, well-supported by MLX swift)
         .init(id: "mlx-community/Qwen2.5-7B-Instruct-4bit", displayName: "Qwen2.5 7B Instruct 4bit", backend: .mlx, sizeEstimate: "~4.2 GB"),
         .init(id: "mlx-community/gemma-2-9b-it-4bit", displayName: "Gemma 2 9B IT 4bit", backend: .mlx, sizeEstimate: "~5.4 GB"),
