@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct GijirokuTakerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appModel = AppModel()
     @StateObject private var library = LibraryModel.shared
     @State private var showingOnboarding = false
@@ -66,6 +67,13 @@ struct GijirokuTakerApp: App {
                     OnboardingView { showingOnboarding = false }
                 }
                 .onAppear {
+                    // Wire the live AppModel into the AppDelegate so the
+                    // Cmd+Q hook can check `isAnyLLMTaskInFlight` and
+                    // cancel in-flight tasks before NSApplication.terminate
+                    // pulls the rug out from under MLX. Reset on view
+                    // disappear so we don't keep a dangling reference if
+                    // the window closes for any reason.
+                    appDelegate.appModel = appModel
                     if !SettingsModel.shared.onboardingCompleted {
                         showingOnboarding = true
                     }
@@ -120,6 +128,59 @@ struct GijirokuTakerApp: App {
                 .foregroundStyle(appModel.isPaused ? .yellow : .red, .primary)
         }
         .menuBarExtraStyle(.menu)
+    }
+}
+
+/// NSApplication delegate carved out so we can intercept Cmd+Q while
+/// MLX work is in flight. Without this, SwiftUI's default termination
+/// path calls `exit()` mid-Metal-command-buffer, and `~Scheduler()`
+/// races with the still-running generate loop — surfacing as a SIGABRT
+/// at `addCompletedHandler` on a tearing-down command buffer.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by `RootView.onAppear`. Held weakly to avoid retain cycles —
+    /// the StateObject in the App outlives the delegate anyway, so the
+    /// reference is "weak" mostly to express intent (this is a back
+    /// channel, not ownership).
+    weak var appModel: AppModel?
+
+    /// Empirically chosen grace window: a 60-token title generation
+    /// finishes in roughly 1–2 s on the smaller MLX models, so 3 s
+    /// covers the most common in-flight Cmd+Q case without making the
+    /// user wait noticeably long. Bigger regenerate turns may still
+    /// race after this expires — the warning dialog has already told
+    /// the user that's possible.
+    private static let terminationGracePeriod: Duration = .seconds(3)
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let appBusy = appModel?.isAnyLLMTaskInFlight ?? false
+        let libBusy = LibraryModel.shared.isAnyLLMTaskInFlight
+        guard appBusy || libBusy else {
+            return .terminateNow
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.string("quit.confirm.title")
+        alert.informativeText = L10n.string("quit.confirm.message")
+        alert.addButton(withTitle: L10n.string("quit.confirm.quit"))
+        alert.addButton(withTitle: L10n.string("quit.confirm.cancel"))
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else {
+            return .terminateCancel
+        }
+
+        // Cancel the live recording's background tasks so MLX stops
+        // taking new generate steps; existing in-flight steps will
+        // complete naturally during the grace window. The autosaved
+        // draft still represents the recording — DraftRecovery promotes
+        // it on the next launch if persistFinalSession never ran.
+        appModel?.prepareForTermination()
+
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.terminationGracePeriod)
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 

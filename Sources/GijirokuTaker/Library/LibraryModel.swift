@@ -30,6 +30,14 @@ final class LibraryModel: ObservableObject {
     let projectStore: FileProjectStore
     let sessionStore: FileSessionStore
 
+    /// True while a past-session regeneration is mid-flight. Used by the
+    /// app-quit handler in the same way as `AppModel.isAnyLLMTaskInFlight`
+    /// — Cmd+Q here would otherwise tear down MLX under the regenerate's
+    /// active Metal command buffer and SIGABRT in `Scheduler::~Scheduler()`.
+    var isAnyLLMTaskInFlight: Bool {
+        regeneratingSessionID != nil || regenerationProgress.isBusy
+    }
+
     private init() {
         let appSupport = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!

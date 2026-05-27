@@ -211,6 +211,12 @@
 "meeting.in_progress_title" = "Recording (autosaved)";
 "meeting.recovered_prefix" = "[Recovered] ";
 
+/* === Quit confirmation when LLM work is in flight === */
+"quit.confirm.title" = "Quit while work is in progress?";
+"quit.confirm.message" = "A recording or LLM generation is still running. Quitting may discard the in-flight summary (the recording itself is autosaved).";
+"quit.confirm.quit" = "Quit";
+"quit.confirm.cancel" = "Cancel";
+
 /* === Model tags (shown next to picker entries) === */
 "model.tag.lightweight" = "Lightweight";
 "model.tag.default" = "Recommended";

@@ -211,6 +211,12 @@
 "meeting.in_progress_title" = "録音中（自動保存）";
 "meeting.recovered_prefix" = "[復元] ";
 
+/* === Quit confirmation when LLM work is in flight === */
+"quit.confirm.title" = "処理中ですが終了しますか？";
+"quit.confirm.message" = "録音または LLM 生成が進行中です。終了すると進行中の要約が失われる可能性があります（録音は自動保存されています）。";
+"quit.confirm.quit" = "終了";
+"quit.confirm.cancel" = "キャンセル";
+
 /* === Model tags (shown next to picker entries) === */
 "model.tag.lightweight" = "軽量";
 "model.tag.default" = "推奨";

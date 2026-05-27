@@ -87,6 +87,40 @@ final class AppModel: ObservableObject {
         settings.diarizationEnabled
     }
 
+    /// True while any LLM-touching work is in flight — live recording (which
+    /// owns the summary loop) or a still-running summary turn even after
+    /// Stop (the post-stop `regenerate` + `generateTitle` chain). Used by
+    /// the app-quit handler to decide whether to warn the user before
+    /// tearing down the MLX scheduler under an in-flight Metal command
+    /// buffer (the regression that surfaced as a SIGABRT in the
+    /// `Scheduler::~Scheduler()` path).
+    var isAnyLLMTaskInFlight: Bool {
+        isRecording || summaryProgress.isBusy
+    }
+
+    /// Cancel every background task this model owns. Used by the app-quit
+    /// handler so a Cmd+Q on a recording / mid-summary session doesn't
+    /// leave MLX generating into a tearing-down Metal stack. Safe to call
+    /// multiple times. Doesn't `await` — the caller (NSApplication
+    /// shouldTerminate hook) gives a short grace period and then forces
+    /// terminateNow regardless of in-flight completion.
+    func prepareForTermination() {
+        if isRecording {
+            // Mirror the cancellation half of stopRecording without firing
+            // the persistFinalSession chain — that chain is itself an LLM
+            // round trip we're trying to avoid. The current transcript +
+            // events stay in the autosaved draft, so the next launch
+            // recovers it via DraftRecovery.
+            isRecording = false
+            isPaused = false
+        }
+        summaryLoopTask?.cancel(); summaryLoopTask = nil
+        audioPumpTask?.cancel(); audioPumpTask = nil
+        waveformTask?.cancel(); waveformTask = nil
+        autosaveTask?.cancel(); autosaveTask = nil
+        Task { [captureEngine] in await captureEngine?.stop() }
+    }
+
     /// Number of distinct (non-nil) speaker labels currently in transcript.
     /// Used by the live recording view's "Speakers: N detected" indicator.
     var distinctSpeakerCount: Int {
