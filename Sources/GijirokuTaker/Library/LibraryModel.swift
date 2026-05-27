@@ -214,5 +214,14 @@ final class LibraryModel: ObservableObject {
         } catch {
             regenerationProgress = .failed(message: error.localizedDescription)
         }
+        // Drop MLX session caches now that this regeneration is done.
+        // Same rationale as AppModel: each regenerate kicks two
+        // distinct ChatSession buckets (regenerate prompt + EventExtractor
+        // prompt), each up to several GB of KV cache. Without this they
+        // pile up across successive "Re-summarize" clicks until the
+        // next model switch or app quit.
+        if let mlx = llm as? MLXClient {
+            await mlx.flushSessionCache()
+        }
     }
 }

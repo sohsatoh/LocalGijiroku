@@ -53,9 +53,18 @@ public actor MLXClient: LLMClient {
     /// extraneous context"), so this should not affect output quality —
     /// but we still rotate the session every `maxTurnsPerSession` turns
     /// to bound memory growth and reset accumulated context.
+    ///
+    /// Bounded by `maxConcurrentSessions` with LRU eviction. The summary
+    /// loop uses ~6 distinct system prompts (appendDelta / consolidate /
+    /// regenerate / EventExtractor / AgendaSuggester / TopicHeadingDetector /
+    /// generateTitle), and a KV cache for a 4B model at 12 turns × 1k
+    /// tokens can sit at ~4 GB each — without an upper bound the resident
+    /// set hits double-digit GB territory in long recordings.
     private var sessions: [String: ChatSession] = [:]
+    private var sessionAccessOrder: [String] = []
     private var turnsPerSession: [String: Int] = [:]
-    private let maxTurnsPerSession = 12
+    private let maxTurnsPerSession = 6
+    private let maxConcurrentSessions = 3
 
     public init(progressHandler: (@Sendable (Progress) -> Void)? = nil) {
         self.progressHandler = progressHandler
@@ -120,9 +129,20 @@ public actor MLXClient: LLMClient {
         // unbounded (and so the model isn't dragging too much stale context).
         let turns = turnsPerSession[sessionKey] ?? 0
         if turns >= maxTurnsPerSession {
-            sessions[sessionKey] = nil
-            turnsPerSession[sessionKey] = 0
+            evictSession(forKey: sessionKey)
             fputs("[MLXClient] rotating session (turn cap reached) key=\(sessionKey.suffix(8))\n", stderr)
+        }
+        // LRU cap: if a fresh session would push us past the concurrent
+        // limit, evict the least-recently-used. The summary loop keeps
+        // ~6 distinct keys hot; capping at 3 means the two least useful
+        // keys (typically generateTitle / classifier, which run rarely)
+        // get re-prefilled on demand instead of permanently occupying
+        // GBs of KV cache.
+        if sessions[sessionKey] == nil, sessions.count >= maxConcurrentSessions {
+            if let oldest = sessionAccessOrder.first {
+                evictSession(forKey: oldest)
+                fputs("[MLXClient] evicting LRU session key=\(oldest.suffix(8)) (cap=\(maxConcurrentSessions))\n", stderr)
+            }
         }
         // Token budget is per-call; temperature 0 = deterministic greedy
         // decoding for stable JSON output.
@@ -151,6 +171,7 @@ public actor MLXClient: LLMClient {
             sessions[sessionKey] = session
             origin = .fresh
         }
+        touchLRU(sessionKey)
         let recordedTurns = turnsPerSession[sessionKey] ?? 0
         fputs("[MLXClient] chat() session \(origin.label) turns=\(recordedTurns)/\(maxTurnsPerSession)\n", stderr)
 
@@ -249,6 +270,40 @@ public actor MLXClient: LLMClient {
         }
     }
 
+    /// Drop the in-memory session bucket for `key`, releasing its KV cache.
+    /// Disk-persisted cache is preserved — the next call for the same key
+    /// can warm-start from disk without re-prefilling the system prompt.
+    /// Single source of truth for "forget this session" so LRU eviction
+    /// and turn-cap rotation stay in sync on the three side data
+    /// structures (`sessions`, `turnsPerSession`, `sessionAccessOrder`).
+    private func evictSession(forKey key: String) {
+        sessions[key] = nil
+        turnsPerSession[key] = nil
+        sessionAccessOrder.removeAll { $0 == key }
+    }
+
+    /// Move `key` to the end of the LRU order. Called after any successful
+    /// session lookup / creation so the cap eviction picks genuinely
+    /// stale keys, not whatever happened to be inserted first.
+    private func touchLRU(_ key: String) {
+        sessionAccessOrder.removeAll { $0 == key }
+        sessionAccessOrder.append(key)
+    }
+
+    /// Drop every cached session. Called by AppModel/LibraryModel at
+    /// recording-end and regeneration-end as a hard ceiling on resident
+    /// KV cache. The KV caches the summary loop accumulates over a long
+    /// recording can sit at tens of GB; clearing them on session
+    /// boundaries keeps the process's resident set from drifting up
+    /// across recordings.
+    public func flushSessionCache() {
+        let count = sessions.count
+        sessions.removeAll()
+        turnsPerSession.removeAll()
+        sessionAccessOrder.removeAll()
+        fputs("[MLXClient] flushSessionCache cleared \(count) session(s)\n", stderr)
+    }
+
     /// Stable key for the session cache. Hashing the instructions (rather
     /// than embedding the full text) keeps the map small even when the
     /// system prompt is multi-KB long. SHA-256 truncated to 16 hex chars is
@@ -275,9 +330,12 @@ public actor MLXClient: LLMClient {
             modelContainer = nil
             loadingTask = nil
             // Sessions hold a strong ref to the old ModelContainer; drop
-            // them so we don't keep an obsolete model resident.
+            // them so we don't keep an obsolete model resident. Also
+            // clear the LRU index so the next model's first session
+            // doesn't get evicted by stale entries.
             sessions.removeAll()
             turnsPerSession.removeAll()
+            sessionAccessOrder.removeAll()
         }
         // fputs to stderr so the Log Viewer (and any external `nohup` sink)
         // sees these events. OSLog .notice is suppressed inside SPM-bundled

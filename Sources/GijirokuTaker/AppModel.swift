@@ -753,6 +753,16 @@ final class AppModel: ObservableObject {
             // when recovery sees an already-saved id — but to be safe we
             // still try to remove the file).
             try? draftStore.delete(id: session.id)
+            // Recording-end is the right boundary to drop the LLM's
+            // in-memory KV cache. The summary loop accumulated ~6
+            // distinct ChatSession buckets, each with up to several GB
+            // of KV cache; without this flush they survive into the
+            // idle period after Stop and (worse) bleed into the next
+            // recording. Disk-side prompt cache is preserved, so the
+            // next recording warm-starts without re-prefilling.
+            if let mlx = client as? MLXClient {
+                await mlx.flushSessionCache()
+            }
             statusMessage = L10n.format("status.saved_format", String(session.id.uuidString.prefix(8)))
             summaryProgress = .done(at: .now, sections: summary.sections.count, events: events.count)
             LibraryModel.shared.reload()
