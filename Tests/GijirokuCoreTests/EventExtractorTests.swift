@@ -63,7 +63,7 @@ import Foundation
     let events = [
         MeetingEvent(kind: .question, text: "競合分析の期限"),
         MeetingEvent(kind: .action, text: "提案書をまとめる", owner: "田中", dueDate: "金曜"),
-        MeetingEvent(kind: .topic, text: "オンボーディング方針", resolved: true),
+        MeetingEvent(kind: .agendaSuggestion, text: "オンボーディング方針", resolved: true),
     ]
     let rendered = EventPrompt.renderOpenEvents(events)
     #expect(rendered.contains("[question] 競合分析の期限"))
@@ -110,4 +110,46 @@ import Foundation
     #expect(list[0].id == originalID)
     #expect(list[0].resolved == true)
     #expect(list[0].resolution == "金曜まで")
+}
+
+// Sessions saved before the rename used kind="topic"; that bucket is now
+// .agendaSuggestion. Both the live LLM-response path and the on-disk
+// Codable decoder need to honor the alias, otherwise old sessions either
+// drop their proposed-topic events or fail to deserialize entirely.
+@Test func parseTreatsLegacyTopicKindAsAgendaSuggestion() throws {
+    let events = try EventExtractor.parse(response: #"""
+    {"events":[{"kind":"topic","text":"オンボーディング方針"}]}
+    """#)
+    #expect(events.count == 1)
+    #expect(events[0].kind == .agendaSuggestion)
+}
+
+@Test func meetingEventDecoderAcceptsLegacyTopicRawValue() throws {
+    let originalID = UUID()
+    let json = #"""
+    {
+      "id": "\#(originalID.uuidString)",
+      "kind": "topic",
+      "text": "話題例",
+      "detectedAt": 0
+    }
+    """#
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .deferredToDate
+    let event = try decoder.decode(MeetingEvent.self, from: Data(json.utf8))
+    #expect(event.id == originalID)
+    #expect(event.kind == .agendaSuggestion)
+    #expect(event.text == "話題例")
+}
+
+@Test func renderOpenEventsHidesAgendaSuggestionsFromExtractorPrompt() {
+    let events = [
+        MeetingEvent(kind: .question, text: "競合分析の期限"),
+        MeetingEvent(kind: .agendaSuggestion, text: "オンボーディング方針"),
+    ]
+    let rendered = EventPrompt.renderOpenEvents(events)
+    #expect(rendered.contains("競合分析の期限"))
+    // Agenda suggestions belong to AgendaSuggester's prompt, not the
+    // extractor's — they must not leak into the OPEN items block.
+    #expect(!rendered.contains("オンボーディング方針"))
 }

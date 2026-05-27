@@ -56,6 +56,7 @@ final class AppModel: ObservableObject {
     private var client: (any LLMClient)?
     private var summaryEngine: SummaryEngine?
     private var eventExtractor: EventExtractor?
+    private var agendaSuggester: AgendaSuggester?
     private var transcriptionEngine: WhisperTranscription?
     private var captureEngine: AudioCaptureEngine?
 
@@ -247,6 +248,12 @@ final class AppModel: ObservableObject {
 
         let eventExtractor = EventExtractor(client: llm, config: .init(model: llmModelID, style: resolvedStyle))
         self.eventExtractor = eventExtractor
+
+        let agendaSuggester = AgendaSuggester(
+            client: llm,
+            config: .init(model: llmModelID, style: resolvedStyle)
+        )
+        self.agendaSuggester = agendaSuggester
 
         let whisperLang = (whisperLangRaw == "auto") ? nil : whisperLangRaw
         let transcription = WhisperTranscription(
@@ -462,6 +469,29 @@ final class AppModel: ObservableObject {
             let added = events.count - beforeCount
             let updated = newEvents.count - added
             logger.info("flushSummaryWindow: sections=\(updatedSummary.sections.count, privacy: .public) events new=\(added, privacy: .public) updated=\(updated, privacy: .public)")
+            // Ask the AI for forward-looking agenda proposals. Failure
+            // here MUST NOT poison the rest of the loop — extraction
+            // already succeeded and we don't want to wipe its progress
+            // because the suggester drifted in JSON shape. We pass only
+            // the latest window, never the full transcript.
+            if let agendaSuggester {
+                do {
+                    let openSuggestions = events.filter { $0.kind == .agendaSuggestion }
+                    let recordedNonSuggestion = events.filter { $0.kind != .agendaSuggestion }
+                    let suggestions = try await agendaSuggester.suggest(
+                        summary: updatedSummary,
+                        openSuggestions: openSuggestions,
+                        recordedEvents: recordedNonSuggestion,
+                        recentSegments: segments
+                    )
+                    let beforeSuggestionCount = events.count
+                    eventMerger.merge(suggestions, into: &events)
+                    let addedSuggestions = events.count - beforeSuggestionCount
+                    logger.info("flushSummaryWindow: agenda suggestions emitted=\(suggestions.count, privacy: .public) new=\(addedSuggestions, privacy: .public)")
+                } catch {
+                    logger.error("Agenda suggestion failed (continuing): \(error.localizedDescription, privacy: .public)")
+                }
+            }
             summaryProgress = .done(at: .now, sections: updatedSummary.sections.count, events: events.count)
         } catch {
             logger.error("Summary error: \(error.localizedDescription, privacy: .public)")

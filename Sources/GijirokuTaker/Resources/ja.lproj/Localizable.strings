@@ -60,7 +60,7 @@
 "pane.view_mode.help" = "サマリ／イベントの表示形式を切替（Markdown はエクスポートと同じ書式）";
 
 /* === Event kinds === */
-"event.kind.topic" = "話題";
+"event.kind.agendaSuggestion" = "話題提案";
 "event.kind.question" = "質問";
 "event.kind.decision" = "決定";
 "event.kind.action" = "アクション";
@@ -148,7 +148,7 @@
 "style.unlimited_zero" = "無制限";
 "style.inherit_caption" = "空欄 / 0 を残すと一つ上のスコープの設定を引き継ぎます。";
 "style.export_template_label" = "エクスポートテンプレート (Markdown)";
-"style.export_template_example" = "利用可能なプレースホルダ: {{title}}, {{date}}, {{duration}}, {{summary}}, {{topics}}, {{actions}}, {{decisions}}, {{questions}}, {{events}}, {{transcript}}。空欄なら組み込みデフォルト (Summary / Topics / Action Items / Decisions / Questions) を使用。";
+"style.export_template_example" = "利用可能なプレースホルダ: {{title}}, {{date}}, {{duration}}, {{summary}}, {{suggestions}}, {{actions}}, {{decisions}}, {{questions}}, {{events}}, {{transcript}}。{{topics}} は {{suggestions}} の旧名で互換維持。空欄なら組み込みデフォルト (Summary / AI Suggestions / Action Items / Decisions / Questions) を使用。";
 "session.export" = "エクスポート";
 "session.export.help" = "このセッションを Markdown ファイルとして保存";
 "style.project_caption" = "このプロジェクトに録音する全セッションへ適用されます。空欄ならユーザー設定を継承。";

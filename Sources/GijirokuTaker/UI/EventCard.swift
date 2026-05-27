@@ -9,7 +9,7 @@ import GijirokuCore
 enum EventKindStyle {
     static func tint(_ kind: MeetingEvent.Kind) -> Color {
         switch kind {
-        case .topic: return .purple
+        case .agendaSuggestion: return .yellow
         case .question: return .orange
         case .decision: return .green
         case .action: return .blue
@@ -18,7 +18,7 @@ enum EventKindStyle {
 
     static func symbol(_ kind: MeetingEvent.Kind) -> String {
         switch kind {
-        case .topic: return "lightbulb.fill"
+        case .agendaSuggestion: return "sparkles"
         case .question: return "questionmark.bubble.fill"
         case .decision: return "checkmark.seal.fill"
         case .action: return "bolt.fill"
@@ -27,16 +27,17 @@ enum EventKindStyle {
 
     static func label(_ kind: MeetingEvent.Kind) -> String {
         switch kind {
-        case .topic: return L10n.string("event.kind.topic")
+        case .agendaSuggestion: return L10n.string("event.kind.agendaSuggestion")
         case .question: return L10n.string("event.kind.question")
         case .decision: return L10n.string("event.kind.decision")
         case .action: return L10n.string("event.kind.action")
         }
     }
 
-    /// Display order used by EventPane's grouped layout. Topics come first
-    /// so the user sees "what's being discussed" before "what to do about it".
-    static let displayOrder: [MeetingEvent.Kind] = [.topic, .action, .decision, .question]
+    /// Display order used by EventPane's grouped layout. AI agenda
+    /// proposals lead so the user sees "what we should also discuss"
+    /// before the items the meeting actually produced.
+    static let displayOrder: [MeetingEvent.Kind] = [.agendaSuggestion, .action, .decision, .question]
 }
 
 /// One row in the events pane. Renders a colored leading badge, the event

@@ -2,10 +2,12 @@ import Foundation
 
 public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
     public enum Kind: String, Codable, Sendable, CaseIterable {
-        /// A topic raised or suggested for discussion (not yet a decision /
-        /// action). Surfaced above Actions & Decisions in the UI so the user
-        /// can see what threads the meeting is opening up.
-        case topic
+        /// AI-generated agenda proposal. Surfaced when the assistant judges
+        /// that an important angle hasn't been discussed yet, given the
+        /// running summary and open items. Distinct from question /
+        /// decision / action — those are extracted from what was actually
+        /// said, this one is proposed BY the assistant.
+        case agendaSuggestion
         case question
         case decision
         case action
@@ -49,17 +51,37 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
 
     /// Custom decoder so MeetingEvent JSON saved before `resolved` /
     /// `resolution` existed still loads cleanly — missing fields default
-    /// to false / nil.
+    /// to false / nil. Also maps the legacy `topic` rawValue to
+    /// `agendaSuggestion` so sessions recorded before the rename keep
+    /// rendering their proposed-topic events.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
-        self.kind = try c.decode(Kind.self, forKey: .kind)
+        let rawKind = try c.decode(String.self, forKey: .kind)
+        guard let kind = MeetingEvent.kind(fromRawValue: rawKind) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: c,
+                debugDescription: "Unknown MeetingEvent kind: \(rawKind)"
+            )
+        }
+        self.kind = kind
         self.text = try c.decode(String.self, forKey: .text)
         self.owner = try? c.decode(String.self, forKey: .owner)
         self.dueDate = try? c.decode(String.self, forKey: .dueDate)
         self.detectedAt = try c.decode(Date.self, forKey: .detectedAt)
         self.resolved = (try? c.decode(Bool.self, forKey: .resolved)) ?? false
         self.resolution = try? c.decode(String.self, forKey: .resolution)
+    }
+
+    /// Resolve a rawValue to a `Kind`, honoring the historical `topic`
+    /// alias. Used by both the persistence decoder and the LLM-response
+    /// coercer so the two paths agree on what counts as the new
+    /// agenda-suggestion bucket.
+    public static func kind(fromRawValue raw: String) -> Kind? {
+        let lower = raw.lowercased()
+        if lower == "topic" { return .agendaSuggestion }
+        return Kind(rawValue: lower)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -87,6 +109,8 @@ public actor EventExtractor {
 
     /// JSON Schema that pins Ollama (0.5+) to exactly the envelope our parser
     /// expects. MLX falls back to prompt-only — schema bytes are unused there.
+    /// `topic` is intentionally absent: agenda proposals come from the
+    /// dedicated `AgendaSuggester` actor now, not from transcript scanning.
     static let responseFormat: LLMResponseFormat = {
         let schema: [String: Any] = [
             "type": "object",
@@ -98,7 +122,7 @@ public actor EventExtractor {
                         "properties": [
                             "kind": [
                                 "type": "string",
-                                "enum": ["topic", "question", "decision", "action"],
+                                "enum": ["question", "decision", "action"],
                             ],
                             "text": ["type": "string"],
                             "owner": ["type": ["string", "null"]],
@@ -169,7 +193,14 @@ public actor EventExtractor {
             )
         }
         return JSONCoercer.coerceEvents(root).compactMap { dto in
-            guard let kind = MeetingEvent.Kind(rawValue: dto.kind.lowercased()) else { return nil }
+            // Legacy "topic" rawValue maps to .agendaSuggestion via the
+            // shared helper so the persistence path and the live LLM
+            // response path don't disagree about what an old kind means.
+            // A small model that still drifts back to emitting "topic"
+            // for a proposal lands in the AI-suggestion bucket — close
+            // enough to its actual semantic that we'd rather show it than
+            // drop it.
+            guard let kind = MeetingEvent.kind(fromRawValue: dto.kind) else { return nil }
             return MeetingEvent(
                 kind: kind,
                 text: dto.text,
@@ -227,23 +258,15 @@ enum EventPrompt {
         let system = """
         You scan meeting transcript fragments and extract structured events
         modelled on Notion AI Meeting Notes' Action Items / Decisions /
-        Open Questions / Suggested Topics. Output JSON only, no prose, no
-        markdown fences.
+        Open Questions. Output JSON only, no prose, no markdown fences.
 
         REQUIRED top-level shape — never omit the outer envelope, never return
         a bare event object, never return a bare array:
-        {"events":[{"kind":"topic"|"question"|"decision"|"action","text":string,"owner":string?,"due":string?,"resolved":boolean,"resolution":string?}]}
+        {"events":[{"kind":"question"|"decision"|"action","text":string,"owner":string?,"due":string?,"resolved":boolean,"resolution":string?}]}
 
-        Kind definitions — be strict, do not guess:
-        - topic: a NEW discussion thread that someone PROPOSED but the group
-          has NOT yet substantively discussed in this fragment or earlier.
-          Use only for forward-looking suggestions like "次回は価格戦略も
-          議論しましょう" / "we should also talk about onboarding later".
-          NEVER use topic for a thread that is already being discussed,
-          already covered in the summary, or already in the OPEN items list
-          below. If a topic was floated and the group immediately dove in,
-          it's no longer a topic — it's a discussion (lives in the summary,
-          not here).
+        Kind definitions — be strict, do not guess. Topics / agenda
+        proposals are NOT extracted here; a separate component proposes
+        agendas based on the running summary.
         - question: a specific, answerable question that is still UNRESOLVED
           at the end of this fragment (often ends with "?"). One distinct
           question per event — don't bundle.
@@ -273,11 +296,11 @@ enum EventPrompt {
         - If nothing qualifies, return {"events":[]}.
 
         Resolution detection (CRITICAL):
-        The OPEN items list below contains questions / topics / actions
-        that were extracted in earlier turns and are still unresolved.
-        If — and ONLY if — the new transcript fragment resolves one of
-        them (an answer is given, an action is reported done, a proposed
-        topic is taken up and concluded, etc.), re-emit that item with:
+        The OPEN items list below contains questions / actions that were
+        extracted in earlier turns and are still unresolved. If — and
+        ONLY if — the new transcript fragment resolves one of them (an
+        answer is given, an action is reported done, etc.), re-emit that
+        item with:
           - kind: the SAME kind as the open item
           - text: copy the open item's text VERBATIM (do not paraphrase,
             do not translate — the matcher uses prefix equality)
@@ -296,9 +319,6 @@ enum EventPrompt {
         New-event examples:
         Transcript: `[A] じゃあ提案書を来週金曜までにまとめて`
         Output: {"events":[{"kind":"action","text":"提案書をまとめる","owner":"A","due":"来週金曜"}]}
-
-        Transcript: `[Speaker_1] あと次回オンボーディングについても話したいです`
-        Output: {"events":[{"kind":"topic","text":"オンボーディングの方針"}]}
 
         Transcript: `[B] じゃあプランBで行きます`
         Output: {"events":[{"kind":"decision","text":"プランBを採用"}]}
@@ -327,8 +347,13 @@ enum EventPrompt {
     /// item as `- [kind] text (owner: X, due: Y)` — owner/due omitted when
     /// nil so the noise floor stays low. The LLM matches via verbatim text
     /// echo, so we don't include synthetic IDs.
+    ///
+    /// AI-generated agenda suggestions are filtered out: they live in a
+    /// different prompt context (the `AgendaSuggester`) and surfacing
+    /// them here would invite the extractor to mis-handle them as
+    /// transcript-derived items.
     static func renderOpenEvents(_ events: [MeetingEvent]) -> String {
-        let open = events.filter { !$0.resolved }
+        let open = events.filter { !$0.resolved && $0.kind != .agendaSuggestion }
         guard !open.isEmpty else { return "" }
         return open.map { e in
             var meta: [String] = []

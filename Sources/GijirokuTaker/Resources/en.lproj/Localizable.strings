@@ -60,7 +60,7 @@
 "pane.view_mode.help" = "Toggle Summary/Events between the list view and Markdown (same format as export)";
 
 /* === Event kinds === */
-"event.kind.topic" = "Topic";
+"event.kind.agendaSuggestion" = "Topic Proposal";
 "event.kind.question" = "Question";
 "event.kind.decision" = "Decision";
 "event.kind.action" = "Action";
@@ -148,7 +148,7 @@
 "style.unlimited_zero" = "Unlimited";
 "style.inherit_caption" = "Leave blank / 0 to inherit from the next less-specific scope.";
 "style.export_template_label" = "Export template (Markdown)";
-"style.export_template_example" = "Placeholders: {{title}}, {{date}}, {{duration}}, {{summary}}, {{topics}}, {{actions}}, {{decisions}}, {{questions}}, {{events}}, {{transcript}}. Leave blank to use the built-in default (Summary / Topics / Action Items / Decisions / Questions).";
+"style.export_template_example" = "Placeholders: {{title}}, {{date}}, {{duration}}, {{summary}}, {{suggestions}}, {{actions}}, {{decisions}}, {{questions}}, {{events}}, {{transcript}}. {{topics}} is a legacy alias for {{suggestions}}. Leave blank to use the built-in default (Summary / AI Suggestions / Action Items / Decisions / Questions).";
 "session.export" = "Export";
 "session.export.help" = "Save this session as a Markdown file";
 "style.project_caption" = "Applied to every session recorded into this project. Blank fields inherit from User settings.";

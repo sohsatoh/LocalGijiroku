@@ -12,6 +12,9 @@ import Foundation
 ///   - `{{actions}}`   action items only, no kind prefix
 ///   - `{{decisions}}` decisions only
 ///   - `{{questions}}` questions only
+///   - `{{suggestions}}` AI-proposed agenda items, no kind prefix
+///   - `{{topics}}`    legacy alias for `{{suggestions}}` (kept for any
+///                     user-edited template referring to the old name)
 ///   - `{{events}}`    every event with a `[kind]` prefix
 ///   - `{{transcript}}` every transcript segment
 public enum MarkdownExporter {
@@ -27,9 +30,9 @@ public enum MarkdownExporter {
 
     {{summary}}
 
-    ## Topics
+    ## AI Suggestions
 
-    {{topics}}
+    {{suggestions}}
 
     ## Action Items
 
@@ -51,7 +54,10 @@ public enum MarkdownExporter {
             "date": formatDate(session.startedAt),
             "duration": formatDuration(from: session.startedAt, to: session.endedAt),
             "summary": renderSummary(session.summary),
-            "topics": renderEvents(session.events, only: .topic, includeKind: false),
+            // Both placeholders alias the same content so user-edited
+            // templates with the older `{{topics}}` keyword keep working.
+            "suggestions": renderEvents(session.events, only: .agendaSuggestion, includeKind: false),
+            "topics": renderEvents(session.events, only: .agendaSuggestion, includeKind: false),
             "actions": renderEvents(session.events, only: .action, includeKind: false),
             "decisions": renderEvents(session.events, only: .decision, includeKind: false),
             "questions": renderEvents(session.events, only: .question, includeKind: false),
