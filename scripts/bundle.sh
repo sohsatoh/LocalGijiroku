@@ -28,6 +28,7 @@ APP_PATH="${ROOT}/build/${APP_NAME}.app"
 CONTENTS="${APP_PATH}/Contents"
 
 echo "==> Building ${APP_NAME} (${XCODE_CONFIG}) via xcodebuild"
+mkdir -p "${DERIVED}"
 cd "${ROOT}"
 xcodebuild \
     -scheme "${SCHEME}" \
