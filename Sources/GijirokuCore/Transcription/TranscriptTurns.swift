@@ -45,22 +45,63 @@ public struct TranscriptTurn: Identifiable, Sendable, Equatable {
         TranscriptTurn.smartConcat(segments.map { $0.text })
     }
 
-    /// Split the confirmed segment run into paragraphs at sentence-ending
-    /// punctuation (。!?.！？), so the UI can render multiple paragraphs
-    /// inside a single speaker turn instead of one wall of text.
+    /// Split the confirmed segment run into paragraphs so the UI can
+    /// render multiple paragraphs inside a single speaker turn instead
+    /// of one wall of text. Three independent triggers, each handles a
+    /// different real-world failure mode:
+    ///   - **terminal punctuation** (`。!?.！？`): the ideal case — the
+    ///     transcript already tells us where sentences end.
+    ///   - **inter-segment time gap > `maxIntraParagraphGap`**: a long
+    ///     pause between Whisper segments. The speaker took a breath
+    ///     or paused at a topic boundary — break the paragraph here so
+    ///     the section structure surfaces even when punctuation is
+    ///     absent.
+    ///   - **running character budget > `maxParagraphCharacters`**:
+    ///     hard ceiling so even pure non-stop speech doesn't grow into
+    ///     a 1000-char single paragraph. Real Whisper ja output often
+    ///     omits 。 entirely on Large v3 Turbo, and without this cap
+    ///     the `.turns` layout collapses an entire turn into one
+    ///     unreadable block (the regression that prompted heading
+    ///     detection feeling "broken" even when the section split was
+    ///     happening underneath).
     ///
     /// Why on `TranscriptTurn` rather than the view: this is data shape,
     /// not styling — the headless CLI runner and tests want the same
     /// segmentation, and it lets the view stay declarative.
+    public static let maxIntraParagraphGap: TimeInterval = 1.5
+    public static let maxParagraphCharacters: Int = 180
+
     public var paragraphs: [String] {
         guard !segments.isEmpty else { return [] }
         var paragraphs: [String] = []
         var current: [String] = []
+        var currentChars = 0
+        var previousEnd: Date?
         for seg in segments {
-            current.append(seg.text)
-            if TranscriptTurn.endsWithTerminalPunctuation(seg.text) {
+            // Pre-break: long pause from the previous segment ends the
+            // current paragraph BEFORE this segment is appended, so the
+            // post-pause text starts a fresh line. Skipped on the first
+            // segment of the turn (previousEnd is nil) and when the
+            // current paragraph is empty (already at a break).
+            if let prev = previousEnd,
+               seg.startTime.timeIntervalSince(prev) > TranscriptTurn.maxIntraParagraphGap,
+               !current.isEmpty {
                 paragraphs.append(TranscriptTurn.smartConcat(current))
                 current.removeAll(keepingCapacity: true)
+                currentChars = 0
+            }
+            current.append(seg.text)
+            currentChars += seg.text.count
+            previousEnd = seg.endTime
+            // Post-break: terminal punctuation OR length cap. The cap is
+            // the safety net for transcripts that come back without
+            // punctuation; the terminator is the preferred signal when
+            // it's available.
+            let endsTerm = TranscriptTurn.endsWithTerminalPunctuation(seg.text)
+            if endsTerm || currentChars >= TranscriptTurn.maxParagraphCharacters {
+                paragraphs.append(TranscriptTurn.smartConcat(current))
+                current.removeAll(keepingCapacity: true)
+                currentChars = 0
             }
         }
         if !current.isEmpty {

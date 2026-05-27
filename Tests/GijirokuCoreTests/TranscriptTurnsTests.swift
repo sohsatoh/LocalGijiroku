@@ -152,6 +152,56 @@ private func seg(
     #expect(paragraphs[2] == "Im fine")
 }
 
+@Test func paragraphsBreakOnLongInterSegmentGap() {
+    // Whisper ja sometimes emits no terminal punctuation at all. A long
+    // pause between segments should still produce a paragraph break so
+    // the .turns block doesn't collapse into a wall of text.
+    let segments = [
+        seg("最初の話題について話します", speaker: "A", start: 0, duration: 1),
+        // 2-second gap (> maxIntraParagraphGap 1.5) — paragraph break
+        seg("次は別の話題に移ります", speaker: "A", start: 3, duration: 1),
+    ]
+    let turns = TranscriptTurnGrouping.turns(from: segments)
+    #expect(turns.count == 1)
+    let paragraphs = turns[0].paragraphs
+    #expect(paragraphs.count == 2)
+    #expect(paragraphs[0] == "最初の話題について話します")
+    #expect(paragraphs[1] == "次は別の話題に移ります")
+}
+
+@Test func paragraphsBreakAtCharacterCapWhenNoPunctuation() {
+    // Pure non-stop Whisper output (no 。 at all). Once the running
+    // character count crosses maxParagraphCharacters the next segment
+    // boundary must force a paragraph break, otherwise the entire
+    // turn is one unreadable block.
+    let longSegmentText = String(repeating: "あ", count: 100)
+    let segments = [
+        seg(longSegmentText, speaker: "A", start: 0, duration: 1),
+        // Same paragraph since first seg alone is < 180 chars (100). Add
+        // a second seg of 100 chars at small gap — combined 200 > 180,
+        // so the post-break fires.
+        seg(longSegmentText, speaker: "A", start: 1.2, duration: 1),
+        seg("追加", speaker: "A", start: 2.4, duration: 1),
+    ]
+    let turns = TranscriptTurnGrouping.turns(from: segments)
+    #expect(turns.count == 1)
+    let paragraphs = turns[0].paragraphs
+    // Expect at least 2 paragraphs: first hits the cap after seg 2,
+    // and seg 3 starts a new paragraph.
+    #expect(paragraphs.count >= 2)
+}
+
+@Test func paragraphsKeepShortContinuousRunInSingleBlock() {
+    // Sanity: short, gap-less, no-punctuation runs stay together. The
+    // new break triggers must not over-fire on normal short content.
+    let segments = [
+        seg("短い", speaker: "A", start: 0, duration: 0.3),
+        seg("発言", speaker: "A", start: 0.4, duration: 0.3),
+    ]
+    let turns = TranscriptTurnGrouping.turns(from: segments)
+    #expect(turns[0].paragraphs.count == 1)
+}
+
 @Test func paragraphsKeepMidSentenceCommasInSameBlock() {
     // 、 is a mid-sentence comma, not a terminator. Two segments that
     // end with 、 should join into one paragraph.
