@@ -82,14 +82,14 @@ public actor TopicHeadingDetector {
         recentSegments: [TranscriptSegment]
     ) async throws -> TopicHeadingDecision {
         let recent = Array(recentSegments.suffix(config.recentTranscriptLineCap))
-        // Need a few lines to judge a topic shift. One or two lines
-        // could just be a side comment, a clarifying question, or a
-        // brief tangent — calling that a new section makes the
-        // heading flow noisier than the transcript itself. 4 lines
-        // ≈ a real exchange between two people. Without an existing
-        // heading the bar is lower (we want SOME initial heading
-        // once the meeting starts moving) but still > 1 line.
-        let minimumLines = previousHeading == nil ? 2 : 4
+        // Need a substantial window to judge a topic shift. Even a
+        // 4-line exchange could be a side question + answer rather
+        // than a true pivot. 6 lines ≈ a multi-turn exchange, which
+        // is the floor for "this is the new thread, not a tangent".
+        // Without an existing heading the bar is lower (we want SOME
+        // initial heading once the meeting starts moving) but still
+        // > 1 line.
+        let minimumLines = previousHeading == nil ? 2 : 6
         guard recent.count >= minimumLines else {
             return TopicHeadingDecision(changed: false, heading: nil)
         }
@@ -195,22 +195,26 @@ enum HeadingPrompt {
         Output JSON ONLY (no markdown fences, no prose):
         {"changed": boolean, "heading": string?}
 
-        DEFAULT to changed=false. Section headings should change at a
-        paragraph-sized cadence — every few minutes — not every
-        sentence. The reader is using headings as table-of-contents
-        anchors, so churning them every turn destroys their value.
+        DEFAULT, AND OVERWHELMINGLY EXPECTED, response: changed=false.
+        Headings are table-of-contents anchors at the SECTION level of a
+        meeting, not paragraph or sentence markers. A typical 30-minute
+        meeting has 3–5 headings total — meaning roughly one heading
+        every 5–10 minutes. Each call you make should treat changed=true
+        as the exception, not a regular outcome.
 
         Return changed=true ONLY when ALL of the following hold:
         - The new thread is clearly distinct from what the current
-          heading describes (different subject, not a deeper dive into
-          the same subject).
-        - The conversation has plausibly moved to that new thread for
-          good — multiple speakers engaged with it, not a single
-          comment.
-        - The current heading is genuinely stale, not merely
-          incomplete. "Pricing" doesn't need to become "Pricing
-          discount tiers" mid-discussion — the original still
-          describes the section.
+          heading describes — a different SUBJECT entirely, not a
+          deeper dive, refinement, or sub-aspect of the same subject.
+        - The shift is the new main thread of the meeting, not a brief
+          digression. Multiple speakers have engaged with it across
+          several turns and it shows every sign of continuing.
+        - The current heading is genuinely stale and would mislead
+          someone scanning the transcript. "Pricing" doesn't need to
+          become "Pricing discount tiers" mid-discussion — the original
+          still describes the section. Only replace it when the new
+          thread is so different that the old heading no longer
+          remotely captures what's being discussed.
 
         Treat the following as NOT a topic shift (changed=false):
         - One- or two-line tangents, clarifying questions, side
