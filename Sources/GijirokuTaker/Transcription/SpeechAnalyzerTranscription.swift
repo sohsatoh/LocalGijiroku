@@ -43,27 +43,23 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
 
     private let logger = Logger(subsystem: "com.gijirokutaker.app", category: "SpeechAnalyzerTranscription")
     private let config: Config
-    private let audioFormat: AVAudioFormat
+    private var reservedLocaleIdentifier: String?
+    private var resolvedAudioFormat: AVAudioFormat?
 
     public init(config: Config = .init()) {
         self.config = config
-        self.audioFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        )!
     }
 
     public func preload() async throws {
         let transcriber = try await makeTranscriber()
-        try await prepareAssets(for: transcriber)
+        try await prepareAssetsAndReserveLocale(for: transcriber)
+        let audioFormat = await compatibleAudioFormat(for: transcriber)
         let analyzer = SpeechAnalyzer(
             modules: [transcriber],
             options: .init(priority: .utility, modelRetention: .lingering)
         )
         try await analyzer.prepareToAnalyze(in: audioFormat)
-        logger.info("SpeechAnalyzer prepared locale=\(self.localeIdentifier, privacy: .public)")
+        logger.info("SpeechAnalyzer prepared locale=\(self.localeIdentifier, privacy: .public) audioFormat=\(Self.describe(audioFormat), privacy: .public)")
     }
 
     public func clearSource(_ source: AudioSource) async {
@@ -106,6 +102,10 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
 
         for await chunk in chunks {
             do {
+                guard let audioFormat = resolvedAudioFormat else {
+                    logger.error("SpeechAnalyzer audio format is not ready; dropping chunk")
+                    continue
+                }
                 let input = try Self.makeAnalyzerInput(
                     from: chunk,
                     timing: &timingBySource[chunk.source],
@@ -136,12 +136,14 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
     ) async {
         do {
             let transcriber = try await makeTranscriber()
-            try await prepareAssets(for: transcriber)
+            try await prepareAssetsAndReserveLocale(for: transcriber)
+            let audioFormat = await compatibleAudioFormat(for: transcriber)
             let analyzer = SpeechAnalyzer(
                 modules: [transcriber],
                 options: .init(priority: .userInitiated, modelRetention: .whileInUse)
             )
             try await analyzer.prepareToAnalyze(in: audioFormat)
+            logger.info("SpeechAnalyzer \(source.rawValue, privacy: .public) prepared audioFormat=\(Self.describe(audioFormat), privacy: .public)")
 
             let baseDate = Date()
             let analysisTask = Task {
@@ -235,7 +237,7 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
         }
     }
 
-    private func prepareAssets(for transcriber: SpeechTranscriber) async throws {
+    private func prepareAssetsAndReserveLocale(for transcriber: SpeechTranscriber) async throws {
         let modules: [any SpeechModule] = [transcriber]
         let status = await AssetInventory.status(forModules: modules)
         switch status {
@@ -250,6 +252,36 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
         @unknown default:
             break
         }
+
+        guard let locale = transcriber.selectedLocales.first else {
+            throw SpeechAnalyzerTranscriptionError.unsupportedLocale(localeIdentifier)
+        }
+        if reservedLocaleIdentifier != locale.identifier {
+            try await AssetInventory.reserve(locale: locale)
+            reservedLocaleIdentifier = locale.identifier
+            logger.info("SpeechAnalyzer reserved locale=\(locale.identifier, privacy: .public)")
+        }
+    }
+
+    private func compatibleAudioFormat(for transcriber: SpeechTranscriber) async -> AVAudioFormat {
+        if let resolvedAudioFormat { return resolvedAudioFormat }
+        let modules: [any SpeechModule] = [transcriber]
+        let naturalFormat = Self.chunkAudioFormat
+        let selected: AVAudioFormat
+        if let best = await SpeechAnalyzer.bestAvailableAudioFormat(
+            compatibleWith: modules,
+            considering: naturalFormat
+        ) {
+            selected = best
+        } else if let best = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules) {
+            selected = best
+        } else if let first = await transcriber.availableCompatibleAudioFormats.first {
+            selected = first
+        } else {
+            selected = naturalFormat
+        }
+        resolvedAudioFormat = selected
+        return selected
     }
 
     private static func makeAnalyzerInputStream() -> (
@@ -268,28 +300,74 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
         timing: inout SourceTiming?,
         audioFormat: AVAudioFormat
     ) throws -> AnalyzerInput {
-        guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: audioFormat,
+        guard let sourceBuffer = AVAudioPCMBuffer(
+            pcmFormat: chunkAudioFormat,
             frameCapacity: AVAudioFrameCount(chunk.samples.count)
         ) else {
             throw SpeechAnalyzerTranscriptionError.cannotBuildAudioBuffer
         }
-        buffer.frameLength = AVAudioFrameCount(chunk.samples.count)
-        guard let channel = buffer.floatChannelData?.pointee else {
+        sourceBuffer.frameLength = AVAudioFrameCount(chunk.samples.count)
+        guard let sourceChannel = sourceBuffer.floatChannelData?.pointee else {
             throw SpeechAnalyzerTranscriptionError.cannotBuildAudioBuffer
         }
         chunk.samples.withUnsafeBufferPointer { source in
             guard let sourceBase = source.baseAddress else { return }
-            channel.update(from: sourceBase, count: source.count)
+            sourceChannel.update(from: sourceBase, count: source.count)
         }
 
+        let buffer = try convert(sourceBuffer, to: audioFormat)
         if timing == nil {
             timing = SourceTiming(nextSampleOffset: 0)
         }
         let startOffset = timing?.nextSampleOffset ?? 0
-        timing?.nextSampleOffset = startOffset + Int64(chunk.samples.count)
-        let start = CMTime(value: startOffset, timescale: CMTimeScale(Int32(chunk.sampleRate.rounded())))
+        timing?.nextSampleOffset = startOffset + Int64(buffer.frameLength)
+        let start = CMTime(value: startOffset, timescale: CMTimeScale(Int32(audioFormat.sampleRate.rounded())))
         return AnalyzerInput(buffer: buffer, bufferStartTime: start)
+    }
+
+    private nonisolated static var chunkAudioFormat: AVAudioFormat {
+        AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        )!
+    }
+
+    private static func convert(
+        _ sourceBuffer: AVAudioPCMBuffer,
+        to audioFormat: AVAudioFormat
+    ) throws -> AVAudioPCMBuffer {
+        if sourceBuffer.format == audioFormat {
+            return sourceBuffer
+        }
+        guard let converter = AVAudioConverter(from: sourceBuffer.format, to: audioFormat) else {
+            throw SpeechAnalyzerTranscriptionError.cannotBuildAudioBuffer
+        }
+        let ratio = audioFormat.sampleRate / sourceBuffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(sourceBuffer.frameLength) * ratio + 32)
+        guard let converted = AVAudioPCMBuffer(
+            pcmFormat: audioFormat,
+            frameCapacity: max(1, capacity)
+        ) else {
+            throw SpeechAnalyzerTranscriptionError.cannotBuildAudioBuffer
+        }
+
+        var emitted = false
+        var error: NSError?
+        let status = converter.convert(to: converted, error: &error) { _, outStatus in
+            if emitted {
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            emitted = true
+            outStatus.pointee = .haveData
+            return sourceBuffer
+        }
+        guard status != .error, error == nil, converted.frameLength > 0 else {
+            throw error ?? SpeechAnalyzerTranscriptionError.cannotBuildAudioBuffer
+        }
+        return converted
     }
 
     private static func timeRangesIntersect(_ lhs: CMTimeRange, _ rhs: CMTimeRange) -> Bool {
@@ -298,5 +376,9 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
         let rhsStart = CMTimeGetSeconds(rhs.start)
         let rhsEnd = CMTimeGetSeconds(CMTimeRangeGetEnd(rhs))
         return lhsStart < rhsEnd && rhsStart < lhsEnd
+    }
+
+    private nonisolated static func describe(_ format: AVAudioFormat) -> String {
+        "sr:\(Int(format.sampleRate)) ch:\(format.channelCount) common:\(format.commonFormat.rawValue) interleaved:\(format.isInterleaved)"
     }
 }
