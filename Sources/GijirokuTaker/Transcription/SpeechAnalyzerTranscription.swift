@@ -25,6 +25,7 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
         case unavailable
         case unsupportedLocale(String)
         case cannotBuildAudioBuffer
+        case unauthorized(String)
 
         var errorDescription: String? {
             switch self {
@@ -34,6 +35,8 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
                 return "SpeechAnalyzer does not support locale \(identifier)."
             case .cannotBuildAudioBuffer:
                 return "Could not build an audio buffer for SpeechAnalyzer."
+            case .unauthorized(let status):
+                return "Speech recognition permission is not authorized (\(status))."
             }
         }
     }
@@ -189,6 +192,7 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
     }
 
     private func makeTranscriber() async throws -> SpeechTranscriber {
+        try await ensureSpeechAuthorization()
         guard SpeechTranscriber.isAvailable else {
             throw SpeechAnalyzerTranscriptionError.unavailable
         }
@@ -200,6 +204,35 @@ public actor SpeechAnalyzerTranscription: TranscriptionEngine {
             locale: supported,
             preset: .timeIndexedProgressiveTranscription
         )
+    }
+
+    private func ensureSpeechAuthorization() async throws {
+        let status = await speechAuthorizationStatus()
+        guard status == .authorized else {
+            throw SpeechAnalyzerTranscriptionError.unauthorized(Self.authorizationDescription(status))
+        }
+    }
+
+    private nonisolated func speechAuthorizationStatus() async -> SFSpeechRecognizerAuthorizationStatus {
+        let current = SFSpeechRecognizer.authorizationStatus()
+        guard current == .notDetermined else { return current }
+        return await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    private nonisolated static func authorizationDescription(
+        _ status: SFSpeechRecognizerAuthorizationStatus
+    ) -> String {
+        switch status {
+        case .authorized: return "authorized"
+        case .denied: return "denied"
+        case .notDetermined: return "notDetermined"
+        case .restricted: return "restricted"
+        @unknown default: return "unknown"
+        }
     }
 
     private func prepareAssets(for transcriber: SpeechTranscriber) async throws {
