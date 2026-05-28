@@ -79,8 +79,13 @@ public struct MeetingEvent: Codable, Sendable, Identifiable, Equatable {
     /// coercer so the two paths agree on what counts as the new
     /// agenda-suggestion bucket.
     public static func kind(fromRawValue raw: String) -> Kind? {
-        let lower = raw.lowercased()
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = Kind(rawValue: trimmed) { return exact }
+        let lower = trimmed.lowercased()
         if lower == "topic" { return .agendaSuggestion }
+        if lower == "agendasuggestion" || lower == "agenda_suggestion" || lower == "agenda-suggestion" {
+            return .agendaSuggestion
+        }
         return Kind(rawValue: lower)
     }
 

@@ -632,9 +632,9 @@ final class AppModel: ObservableObject {
         // Use the confirmed-only view — the rolling unconfirmed tail would
         // change the LLM's output between turns and produce flaky summaries.
         let segments = confirmedTranscript
+        let existingSummary = summary
+        let existingEvents = events
         logger.info("regenerateSummary: full transcript \(segments.count, privacy: .public) segments")
-        summary = CumulativeSummary()
-        events.removeAll()
         pendingForSummary.removeAll()
         summaryProgress = .summarizing(segmentCount: segments.count)
         do {
@@ -643,13 +643,30 @@ final class AppModel: ObservableObject {
             // over the entire transcript. Same path Stop / the saved-
             // session "Re-summarize" button take.
             let updatedSummary = try await summaryEngine.regenerate(transcript: segments)
-            summaryProgress = .extractingEvents(segmentCount: segments.count)
-            let newEvents = try await eventExtractor.extract(from: segments)
             summary = updatedSummary
-            eventMerger.merge(newEvents, into: &events)
+            summaryProgress = .extractingEvents(segmentCount: segments.count)
+            do {
+                let newEvents = try await eventExtractor.extract(
+                    from: segments,
+                    openEvents: existingEvents
+                )
+                // Treat the full-transcript extraction as an update, not an
+                // authoritative replacement. Small local models often omit
+                // events they previously found, so starting from an empty list
+                // can erase the user's agenda/task pane on a successful but
+                // incomplete extraction.
+                var mergedEvents = existingEvents
+                eventMerger.merge(newEvents, into: &mergedEvents)
+                events = mergedEvents
+            } catch {
+                logger.error("regenerateSummary event extraction failed (keeping existing events): \(error.localizedDescription, privacy: .public)")
+                events = existingEvents
+            }
             summaryProgress = .done(at: .now, sections: updatedSummary.sections.count, events: events.count)
         } catch {
             logger.error("regenerateSummary error: \(error.localizedDescription, privacy: .public)")
+            summary = existingSummary
+            events = existingEvents
             summaryProgress = .failed(message: error.localizedDescription)
         }
     }
@@ -733,6 +750,18 @@ final class AppModel: ObservableObject {
                 logger.error("Final regenerate failed (keeping delta summary): \(error.localizedDescription, privacy: .public)")
             }
         }
+        if let eventExtractor, !finalTranscript.isEmpty {
+            summaryProgress = .extractingEvents(segmentCount: finalTranscript.count)
+            do {
+                let newEvents = try await eventExtractor.extract(
+                    from: finalTranscript,
+                    openEvents: events
+                )
+                eventMerger.merge(newEvents, into: &events)
+            } catch {
+                logger.error("Final event extraction failed (keeping existing events): \(error.localizedDescription, privacy: .public)")
+            }
+        }
         summaryProgress = .generatingTitle
         let title = await generateTitle(transcript: finalTranscript)
         // Honor the user's explicit pre-selection. Only auto-classify when
@@ -782,8 +811,8 @@ final class AppModel: ObservableObject {
             // result, and reset the live workspace so the next Start begins
             // from a clean state instead of looking like the previous recording
             // is still "going".
-            LibraryModel.shared.selection = [.session(session.id)]
             resetLiveWorkspace()
+            LibraryModel.shared.selection = [.session(session.id)]
         } catch {
             statusMessage = L10n.format("status.summary_error_format", error.localizedDescription)
             summaryProgress = .failed(message: error.localizedDescription)
