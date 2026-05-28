@@ -709,15 +709,18 @@ final class AppModel: ObservableObject {
         audioPumpTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                // Load the model before starting audio. If audio starts first,
+                // chunks accumulate in the AsyncStream buffer during the 15–20 s
+                // cold-load window. The first inference then processes a large
+                // stale backlog in rapid succession, which can corrupt WhisperKit's
+                // internal state and silence transcription for the rest of the
+                // session. Loading first ensures the engine is ready before any
+                // audio flows — warmUpWhisper() pre-warms the cache at launch so
+                // preload() returns immediately for the common case.
+                self.statusMessage = L10n.string("status.loading_model")
+                try await transcriber.preload()
                 self.statusMessage = L10n.string("status.starting_audio")
                 let audioStream = try await engine.start()
-                self.statusMessage = L10n.string("status.loading_model")
-                // On first launch WhisperKit downloads ~626 MB before it can
-                // transcribe. Await preload so "loading_model" status persists
-                // until the model is ready — without this the status flips to
-                // "recording" immediately and the user sees no transcript with
-                // no explanation why.
-                try await transcriber.preload()
                 let segmentStream = transcriber.transcribe(audioStream)
                 self.statusMessage = L10n.string("status.recording")
                 for await segment in segmentStream {
