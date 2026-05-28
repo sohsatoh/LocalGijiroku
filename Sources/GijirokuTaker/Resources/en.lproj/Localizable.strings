@@ -86,7 +86,7 @@
 "settings.app_language.en" = "English";
 "settings.app_language.caption" = "Changes apply immediately.";
 "settings.transcription_backend" = "Transcription engine";
-"transcription.backend.whisperkit" = "WhisperKit";
+"transcription.backend.whisperkit" = "WhisperKit (Recommended)";
 "transcription.backend.speech_analyzer" = "SpeechAnalyzer";
 "settings.transcription_backend.caption" = "Switches between WhisperKit and Apple SpeechAnalyzer on the next Start. SpeechAnalyzer requires macOS 26 or later.";
 "settings.transcription_model" = "Transcription model";

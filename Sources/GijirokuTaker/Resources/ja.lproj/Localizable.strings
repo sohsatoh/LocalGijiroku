@@ -86,7 +86,7 @@
 "settings.app_language.en" = "English";
 "settings.app_language.caption" = "変更は即座に反映されます。";
 "settings.transcription_backend" = "文字起こしエンジン";
-"transcription.backend.whisperkit" = "WhisperKit";
+"transcription.backend.whisperkit" = "WhisperKit（推奨）";
 "transcription.backend.speech_analyzer" = "SpeechAnalyzer";
 "settings.transcription_backend.caption" = "WhisperKit と Apple SpeechAnalyzer を次回の Start から切り替えます。SpeechAnalyzer は macOS 26 以降が必要です。";
 "settings.transcription_model" = "文字起こしモデル";
