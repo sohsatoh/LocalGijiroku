@@ -42,11 +42,14 @@ final class AppModel: ObservableObject {
     /// (within this app run) until they reset it. Not persisted to disk —
     /// the persistent default lives in Settings.
     @Published var languageOverride: String? = nil
-    /// Per-session speaker count hint for Pyannote diarization. 0 = automatic.
-    /// Set in the sidebar before starting a recording; passed to
-    /// `WhisperTranscription.Config.speakerCount` on Start. Not persisted to
-    /// disk — carries over to the next session until the user changes it.
-    @Published var pendingSpeakerCount: Int = 0
+    /// Speaker count hint for Pyannote diarization. 0 = automatic. Set in
+    /// the sidebar before starting a recording; passed to
+    /// `WhisperTranscription.Config.speakerCount` on Start. Persisted in
+    /// Settings so a user's usual meeting shape (1-on-1, 3-person standup)
+    /// survives app restarts.
+    @Published var pendingSpeakerCount: Int = SettingsModel.shared.pendingSpeakerCount {
+        didSet { settings.pendingSpeakerCount = pendingSpeakerCount }
+    }
 
     /// The whisper language that will be used on next Start.
     var effectiveLanguage: String {

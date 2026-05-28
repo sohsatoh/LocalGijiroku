@@ -448,8 +448,11 @@ public actor WhisperTranscription: TranscriptionEngine {
                     if let fixedLabel {
                         stableSpeaker = fixedLabel
                     } else {
-                        let midpoint = (Double(seg.start) + Double(seg.end)) / 2
-                        let localSpeaker = Self.speaker(at: midpoint, in: speakerSpans)
+                        let localSpeaker = Self.speaker(
+                            overlappingStart: Double(seg.start),
+                            end: Double(seg.end),
+                            in: speakerSpans
+                        )
                         stableSpeaker = localSpeaker.flatMap { labelMap[$0] } ?? localSpeaker
                     }
                     return (seg, segStart, segEnd, stableSpeaker)
@@ -519,10 +522,10 @@ public actor WhisperTranscription: TranscriptionEngine {
             if let first = tailItems.first, let last = tailItems.last {
                 // Pick the dominant speaker label from the tail items
                 // (most likely the same across all of them — this just
-                // picks deterministically if not).
-                let speakerLabel = tailItems
-                    .compactMap { $0.3 }
-                    .first
+                // picks the largest covered duration if not).
+                let speakerLabel = Self.dominantSpeaker(
+                    in: tailItems.map { (start: $0.1, end: $0.2, speaker: $0.3) }
+                )
                 let joined = tailItems
                     .map { $0.0.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
@@ -582,9 +585,44 @@ public actor WhisperTranscription: TranscriptionEngine {
         }
     }
 
-    /// Returns the speaker label whose span contains `time` (in seconds
-    /// relative to the audio buffer), or nil if none.
-    fileprivate static func speaker(at time: Double, in spans: [SpeakerSpan]) -> String? {
-        spans.first(where: { time >= $0.start && time <= $0.end })?.speaker
+    /// Returns the speaker label with the largest overlap against the
+    /// Whisper segment. Using the midpoint alone is fragile when Whisper
+    /// emits a long segment that crosses a speaker handoff; interval overlap
+    /// makes the assignment follow the speaker who actually occupied most
+    /// of the segment.
+    fileprivate static func speaker(
+        overlappingStart start: Double,
+        end: Double,
+        in spans: [SpeakerSpan]
+    ) -> String? {
+        let overlaps = overlapBySpeaker(start: start, end: end, spans: spans)
+        return overlaps.max(by: { $0.value < $1.value })?.key
+    }
+
+    fileprivate static func dominantSpeaker(
+        in items: [(start: Date, end: Date, speaker: String?)]
+    ) -> String? {
+        var totals: [String: TimeInterval] = [:]
+        for item in items {
+            guard let speaker = item.speaker else { continue }
+            totals[speaker, default: 0] += max(0, item.end.timeIntervalSince(item.start))
+        }
+        return totals.max(by: { $0.value < $1.value })?.key
+    }
+
+    private static func overlapBySpeaker(
+        start: Double,
+        end: Double,
+        spans: [SpeakerSpan]
+    ) -> [String: Double] {
+        guard end > start else { return [:] }
+        var totals: [String: Double] = [:]
+        for span in spans {
+            let overlap = max(0, min(end, span.end) - max(start, span.start))
+            if overlap > 0 {
+                totals[span.speaker, default: 0] += overlap
+            }
+        }
+        return totals
     }
 }
