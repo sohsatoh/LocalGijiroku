@@ -142,6 +142,24 @@ import Foundation
     #expect(event.text == "話題例")
 }
 
+@Test func meetingEventDecoderAcceptsAgendaSuggestionRawValue() throws {
+    let originalID = UUID()
+    let json = #"""
+    {
+      "id": "\#(originalID.uuidString)",
+      "kind": "agendaSuggestion",
+      "text": "未討議の論点",
+      "detectedAt": 0
+    }
+    """#
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .deferredToDate
+    let event = try decoder.decode(MeetingEvent.self, from: Data(json.utf8))
+    #expect(event.id == originalID)
+    #expect(event.kind == .agendaSuggestion)
+    #expect(event.text == "未討議の論点")
+}
+
 @Test func renderOpenEventsHidesAgendaSuggestionsFromExtractorPrompt() {
     let events = [
         MeetingEvent(kind: .question, text: "競合分析の期限"),

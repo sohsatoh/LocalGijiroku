@@ -198,18 +198,29 @@ final class LibraryModel: ObservableObject {
             // saved transcript in one shot, replacing whatever the
             // recording-time delta loop accumulated.
             let newSummary = try await summaryEngine.regenerate(transcript: session.transcript)
-            regenerationProgress = .extractingEvents(segmentCount: session.transcript.count)
-            let newEvents = try await eventExtractor.extract(from: session.transcript)
-            var merged: [MeetingEvent] = []
-            EventMerger().merge(newEvents, into: &merged)
             session.summary = newSummary
-            session.events = merged
+            regenerationProgress = .extractingEvents(segmentCount: session.transcript.count)
+            do {
+                let newEvents = try await eventExtractor.extract(
+                    from: session.transcript,
+                    openEvents: session.events
+                )
+                // Event extraction is not authoritative deletion: the model
+                // can legally return an empty or partial list even when useful
+                // events already exist. Keep the current pane contents and let
+                // the merger rewrite/add details from the fresh pass.
+                var merged = session.events
+                EventMerger().merge(newEvents, into: &merged)
+                session.events = merged
+            } catch {
+                fputs("[GijirokuTaker] session event extraction failed (keeping existing events): \(error.localizedDescription)\n", stderr)
+            }
             try sessionStore.save(session)
             reload()
             regenerationProgress = .done(
                 at: .now,
-                sections: newSummary.sections.count,
-                events: merged.count
+                sections: session.summary.sections.count,
+                events: session.events.count
             )
         } catch {
             regenerationProgress = .failed(message: error.localizedDescription)

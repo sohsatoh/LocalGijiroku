@@ -84,6 +84,26 @@ private func tempDir() -> URL {
     #expect(loaded.headings.last?.startTime == now.addingTimeInterval(60))
 }
 
+@Test func sessionRoundTripsAgendaSuggestionsThroughCodable() throws {
+    let dir = tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = FileSessionStore(directory: dir)
+
+    let original = Session(
+        id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
+        title: "Agenda suggestion test",
+        events: [
+            MeetingEvent(kind: .question, text: "期限はいつか"),
+            MeetingEvent(kind: .agendaSuggestion, text: "未討議のリスク確認"),
+        ]
+    )
+
+    try store.save(original)
+    let loaded = try #require(try store.load(id: original.id))
+    #expect(loaded.events.count == 2)
+    #expect(loaded.events.map(\.kind) == [.question, .agendaSuggestion])
+}
+
 @Test func listReturnsSavedSessionsNewestFirst() throws {
     let dir = tempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
