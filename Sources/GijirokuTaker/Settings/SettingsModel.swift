@@ -29,8 +29,10 @@ final class SettingsModel: ObservableObject {
         static let headingDetectionEnabled = "headingDetectionEnabled"
         static let agendaSuggestionEnabled = "agendaSuggestionEnabled"
         static let pendingSpeakerCount = "pendingSpeakerCount"
+        static let transcriptionBackend = "transcriptionBackend"
     }
 
+    @AppStorage(Keys.transcriptionBackend) var transcriptionBackendRaw: String = TranscriptionBackend.whisperKit.rawValue
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
     @AppStorage(Keys.whisperLanguage) var whisperLanguage: String = WhisperLanguage.ja.rawValue
     @AppStorage(Keys.llmBackend) var llmBackendRaw: String = LLMBackend.mlx.rawValue
@@ -126,6 +128,11 @@ final class SettingsModel: ObservableObject {
         set { llmBackendRaw = newValue.rawValue }
     }
 
+    var transcriptionBackend: TranscriptionBackend {
+        get { TranscriptionBackend(rawValue: transcriptionBackendRaw) ?? .whisperKit }
+        set { transcriptionBackendRaw = newValue.rawValue }
+    }
+
     var activeLLMModelID: String {
         switch llmBackend {
         case .mlx: return mlxModelID
@@ -136,6 +143,20 @@ final class SettingsModel: ObservableObject {
     private init() {}
 }
 
+enum TranscriptionBackend: String, CaseIterable, Identifiable, Sendable {
+    case whisperKit
+    case speechAnalyzer
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .whisperKit: return L10n.string("transcription.backend.whisperkit")
+        case .speechAnalyzer: return L10n.string("transcription.backend.speech_analyzer")
+        }
+    }
+}
+
 enum WhisperModelChoice: String, CaseIterable, Identifiable {
     case tiny = "tiny"
     case base = "base"
@@ -143,7 +164,7 @@ enum WhisperModelChoice: String, CaseIterable, Identifiable {
     case medium = "medium"
     case largeV3 = "large-v3"
     case largeV3Turbo = "large-v3-v20240930_626MB"
-    case largeV3Full = "large-v3-v20240930_949MB"
+    case largeV3Full = "large-v3_947MB"
 
     var id: String { rawValue }
 

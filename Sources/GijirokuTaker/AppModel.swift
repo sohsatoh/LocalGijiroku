@@ -71,7 +71,7 @@ final class AppModel: ObservableObject {
     private var eventExtractor: EventExtractor?
     private var agendaSuggester: AgendaSuggester?
     private var headingDetector: TopicHeadingDetector?
-    private var transcriptionEngine: WhisperTranscription?
+    private var transcriptionEngine: (any TranscriptionEngine)?
     private var captureEngine: AudioCaptureEngine?
 
     private var pendingForSummary: [TranscriptSegment] = []
@@ -92,7 +92,7 @@ final class AppModel: ObservableObject {
     /// Whether diarization is configured to run for the current session.
     /// Forwards settings so SwiftUI views don't need to access SettingsModel.
     var diarizationEnabled: Bool {
-        settings.diarizationEnabled
+        settings.transcriptionBackend == .whisperKit && settings.diarizationEnabled
     }
 
     /// True while any LLM-touching work is in flight — live recording (which
@@ -234,7 +234,7 @@ final class AppModel: ObservableObject {
         sessionId = UUID()
         sessionStartedAt = .now
         statusMessage = L10n.string("status.starting")
-        fputs("[GijirokuTaker] startRecording backend=\(settings.llmBackend.rawValue)\n", stderr)
+        fputs("[GijirokuTaker] startRecording backend=\(settings.llmBackend.rawValue) transcription=\(settings.transcriptionBackend.rawValue)\n", stderr)
 
         // Build per-session engines from current settings so that changes apply
         // without restarting the app.
@@ -310,17 +310,7 @@ final class AppModel: ObservableObject {
         )
         self.headingDetector = headingDetector
 
-        let whisperLang = (whisperLangRaw == "auto") ? nil : whisperLangRaw
-        let transcription = WhisperTranscription(
-            config: .init(
-                modelName: settings.whisperModel,
-                language: whisperLang ?? "ja",
-                diarizationEnabled: settings.diarizationEnabled,
-                vadEnabled: settings.vadEnabled,
-                speakerCount: pendingSpeakerCount > 0 ? pendingSpeakerCount : nil
-            )
-        )
-        self.transcriptionEngine = transcription
+        self.transcriptionEngine = makeTranscriptionEngine(languageRaw: whisperLangRaw)
 
         transcript.removeAll()
         liveTail.removeAll()
@@ -336,6 +326,42 @@ final class AppModel: ObservableObject {
         startAutosaveLoop()
         startSummaryLoop()
         startAudioPipeline()
+    }
+
+    private func makeTranscriptionEngine(languageRaw: String) -> any TranscriptionEngine {
+        let whisperLang = (languageRaw == "auto") ? nil : languageRaw
+        switch settings.transcriptionBackend {
+        case .whisperKit:
+            return WhisperTranscription(
+                config: .init(
+                    modelName: settings.whisperModel,
+                    language: whisperLang ?? "ja",
+                    diarizationEnabled: settings.diarizationEnabled,
+                    vadEnabled: settings.vadEnabled,
+                    speakerCount: pendingSpeakerCount > 0 ? pendingSpeakerCount : nil
+                )
+            )
+        case .speechAnalyzer:
+            if #available(macOS 26.0, *) {
+                return SpeechAnalyzerTranscription(
+                    config: .init(
+                        language: languageRaw,
+                        speakerLabelMicrophone: settings.diarizationEnabled
+                    )
+                )
+            } else {
+                fputs("[GijirokuTaker] SpeechAnalyzer requires macOS 26; falling back to WhisperKit\n", stderr)
+                return WhisperTranscription(
+                    config: .init(
+                        modelName: settings.whisperModel,
+                        language: whisperLang ?? "ja",
+                        diarizationEnabled: settings.diarizationEnabled,
+                        vadEnabled: settings.vadEnabled,
+                        speakerCount: pendingSpeakerCount > 0 ? pendingSpeakerCount : nil
+                    )
+                )
+            }
+        }
     }
 
     func stopRecording() {
@@ -411,9 +437,7 @@ final class AppModel: ObservableObject {
             // doesn't keep transcribing the last 25 s of stale audio.
             // Symmetric for both directions: on-toggle starts a fresh
             // buffer, off-toggle clears one that would otherwise persist.
-            if let transcription = self.transcriptionEngine {
-                await transcription.clearSource(.system)
-            }
+            await self.transcriptionEngine?.clearSource(.system)
         }
         if !enabled {
             // Reset the waveform meter so the muted source visibly quiets.
@@ -426,9 +450,7 @@ final class AppModel: ObservableObject {
         guard isRecording, !isPaused, let captureEngine else { return }
         Task {
             await captureEngine.setMicEnabled(enabled)
-            if let transcription = self.transcriptionEngine {
-                await transcription.clearSource(.microphone)
-            }
+            await self.transcriptionEngine?.clearSource(.microphone)
         }
         if !enabled {
             micWaveform = WaveformChannelState()

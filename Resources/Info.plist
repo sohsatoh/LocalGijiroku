@@ -36,6 +36,8 @@
     <string>会議中のシステム音声を文字起こしし、議事録を生成するために使用します。</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>マイクから音声を取り込み、発言をリアルタイムに文字起こしして議事録を生成します。</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Apple SpeechAnalyzer を使用して、録音した音声をローカルで文字起こしするために使用します。</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>ZoomやGoogle Meetなど、他アプリの音声をリアルタイムに文字起こしして議事録を生成するため、ScreenCaptureKit経由でシステム音声を取得します。画面の映像は録画しません。</string>
 </dict>

@@ -61,5 +61,12 @@ public struct TranscriptSegment: Codable, Sendable, Identifiable, Equatable {
 }
 
 public protocol TranscriptionEngine: Sendable {
+    func preload() async throws
+    func clearSource(_ source: AudioSource) async
     func transcribe(_ chunks: AsyncStream<AudioChunk>) -> AsyncStream<TranscriptSegment>
+}
+
+public extension TranscriptionEngine {
+    func preload() async throws {}
+    func clearSource(_ source: AudioSource) async {}
 }

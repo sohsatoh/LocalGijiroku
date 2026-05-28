@@ -24,6 +24,7 @@ struct GijirokuTakerApp: App {
     /// cached at module level by `WhisperModelCache` and reused across all
     /// sessions with the same config.
     private static func warmUpWhisper() {
+        guard SettingsModel.shared.transcriptionBackend == .whisperKit else { return }
         let modelName = SettingsModel.shared.whisperModel
         let vadEnabled = SettingsModel.shared.vadEnabled
         Task.detached(priority: .utility) {
