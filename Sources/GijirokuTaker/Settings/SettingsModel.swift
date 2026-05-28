@@ -29,8 +29,10 @@ final class SettingsModel: ObservableObject {
         static let headingDetectionEnabled = "headingDetectionEnabled"
         static let agendaSuggestionEnabled = "agendaSuggestionEnabled"
         static let pendingSpeakerCount = "pendingSpeakerCount"
+        static let transcriptionBackend = "transcriptionBackend"
     }
 
+    @AppStorage(Keys.transcriptionBackend) var transcriptionBackendRaw: String = TranscriptionBackend.whisperKit.rawValue
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
     @AppStorage(Keys.whisperLanguage) var whisperLanguage: String = WhisperLanguage.ja.rawValue
     @AppStorage(Keys.llmBackend) var llmBackendRaw: String = LLMBackend.mlx.rawValue
@@ -126,6 +128,11 @@ final class SettingsModel: ObservableObject {
         set { llmBackendRaw = newValue.rawValue }
     }
 
+    var transcriptionBackend: TranscriptionBackend {
+        get { TranscriptionBackend(rawValue: transcriptionBackendRaw) ?? .whisperKit }
+        set { transcriptionBackendRaw = newValue.rawValue }
+    }
+
     var activeLLMModelID: String {
         switch llmBackend {
         case .mlx: return mlxModelID
@@ -134,6 +141,20 @@ final class SettingsModel: ObservableObject {
     }
 
     private init() {}
+}
+
+enum TranscriptionBackend: String, CaseIterable, Identifiable, Sendable {
+    case whisperKit
+    case speechAnalyzer
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .whisperKit: return L10n.string("transcription.backend.whisperkit")
+        case .speechAnalyzer: return L10n.string("transcription.backend.speech_analyzer")
+        }
+    }
 }
 
 enum WhisperModelChoice: String, CaseIterable, Identifiable {

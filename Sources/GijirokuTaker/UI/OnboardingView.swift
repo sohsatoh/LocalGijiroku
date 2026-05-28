@@ -154,8 +154,17 @@ struct OnboardingView: View {
                     .padding(.leading, 2)
             }
 
-            // Language belongs here too — it primarily affects Whisper but
-            // is part of "what kind of meetings will you record".
+            Picker(L10n.string("settings.transcription_backend"), selection: Binding(
+                get: { settings.transcriptionBackend },
+                set: { settings.transcriptionBackend = $0 }
+            )) {
+                ForEach(TranscriptionBackend.allCases) { backend in
+                    Text(backend.displayName).tag(backend)
+                }
+            }
+
+            // Language belongs here too — it affects the transcription engine
+            // and is part of "what kind of meetings will you record".
             Picker(L10n.string("settings.language"), selection: $settings.whisperLanguage) {
                 ForEach(WhisperLanguage.allCases) { lang in
                     Text(lang.displayName).tag(lang.rawValue)
@@ -244,7 +253,9 @@ struct OnboardingView: View {
 
             Toggle(L10n.string("settings.capture_system"), isOn: $settings.captureSystemAudio)
             Toggle(L10n.string("settings.capture_mic"), isOn: $settings.captureMicrophone)
-            Toggle(L10n.string("settings.diarization"), isOn: $settings.diarizationEnabled)
+            if settings.transcriptionBackend == .whisperKit {
+                Toggle(L10n.string("settings.diarization"), isOn: $settings.diarizationEnabled)
+            }
 
             Text(loc: "onboarding.audio.recommend")
                 .font(.caption)
@@ -296,7 +307,10 @@ struct OnboardingView: View {
         var parts: [String] = []
         if settings.captureSystemAudio { parts.append(L10n.string("settings.capture_system")) }
         if settings.captureMicrophone { parts.append(L10n.string("settings.capture_mic")) }
-        if settings.diarizationEnabled { parts.append(L10n.string("settings.diarization")) }
+        parts.append(settings.transcriptionBackend.displayName)
+        if settings.transcriptionBackend == .whisperKit, settings.diarizationEnabled {
+            parts.append(L10n.string("settings.diarization"))
+        }
         if parts.isEmpty { return "—" }
         return parts.joined(separator: " · ")
     }
@@ -483,4 +497,3 @@ struct OnboardingView: View {
         onComplete()
     }
 }
-

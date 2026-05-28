@@ -3,6 +3,7 @@ import GijirokuCore
 
 struct LibrarySidebar: View {
     @ObservedObject var library: LibraryModel
+    @ObservedObject private var settings = SettingsModel.shared
     @EnvironmentObject private var appModel: AppModel
     @State private var showingNewProject = false
     @State private var newProjectName = ""
@@ -155,13 +156,34 @@ struct LibrarySidebar: View {
             // Hidden while a recording is in progress because the transcription
             // engine has already been built for the locked-in language.
             if !appModel.isRecording {
+                transcriptionBackendPicker
                 languagePicker
-                if SettingsModel.shared.diarizationEnabled {
+                if settings.transcriptionBackend == .whisperKit,
+                   settings.diarizationEnabled {
                     speakerCountPicker
                 }
             }
         }
         .padding(8)
+    }
+
+    private var transcriptionBackendPicker: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "waveform")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("", selection: Binding(
+                get: { settings.transcriptionBackend },
+                set: { settings.transcriptionBackend = $0 }
+            )) {
+                ForEach(TranscriptionBackend.allCases) { backend in
+                    Text(backend.displayName).tag(backend)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .font(.caption)
+        }
     }
 
     private var languagePicker: some View {
@@ -205,8 +227,8 @@ struct LibrarySidebar: View {
     }
 
     private var defaultLanguageDisplay: String {
-        WhisperLanguage(rawValue: SettingsModel.shared.whisperLanguage)?.displayName
-            ?? SettingsModel.shared.whisperLanguage
+        WhisperLanguage(rawValue: settings.whisperLanguage)?.displayName
+            ?? settings.whisperLanguage
     }
 
     // MARK: - Sessions list

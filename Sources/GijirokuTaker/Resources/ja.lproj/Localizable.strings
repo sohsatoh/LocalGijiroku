@@ -85,6 +85,10 @@
 "settings.app_language.ja" = "日本語";
 "settings.app_language.en" = "English";
 "settings.app_language.caption" = "変更は即座に反映されます。";
+"settings.transcription_backend" = "文字起こしエンジン";
+"transcription.backend.whisperkit" = "WhisperKit";
+"transcription.backend.speech_analyzer" = "SpeechAnalyzer";
+"settings.transcription_backend.caption" = "WhisperKit と Apple SpeechAnalyzer を次回の Start から切り替えます。SpeechAnalyzer は macOS 26 以降が必要です。";
 "settings.transcription_model" = "文字起こしモデル";
 "settings.language" = "文字起こし言語";
 "settings.takes_effect_caption" = "変更は次回の Start から有効になります。";
@@ -125,6 +129,7 @@
 "settings.bleed_dedup_caption" = "スピーカー会議でも安心: スピーカーから出ている会議相手の声がマイクに回り込んだ場合は、システム音声側の transcript と内容が一致する mic セグメントを自動で重複排除します。Apple VoiceProcessingIO は使わない設計なので、Start を押してもスピーカー出力が ducking で小さくなることはありません。";
 "settings.vad_caption" = "Voice Activity Detection を有効にすると、Whisper に渡す前に音声を「発話あり」区間で先に切り分けます。会議のように沈黙が混じる音声でセグメントが文の途中で切れる問題を抑え、議事録らしい区切りになります。極端に静かな発話まで拾いたい場合のみ OFF を検討。";
 "settings.diarization_caption" = "話者分離は SpeakerKit (Pyannote, CoreML) で各 transcript セグメントに speaker ラベルを付与します。初回 ON 時に segmentation + embedding モデル (~30MB) を DL。CPU/GPU 負荷が増えるので録音が長いと遅延しがち。ローリング窓の時間重複でラベルを安定化していますが、長い沈黙を挟むと再アサインされる可能性があります。";
+"settings.speech_analyzer_caption" = "SpeechAnalyzer は Apple Speech のローカル文字起こしを使用します。WhisperKit の VAD / Pyannote 話者分離は適用されません。";
 "recording.speaker_count.auto" = "話者人数: 自動";
 "recording.speaker_count.n_format" = "話者人数: %d 人";
 

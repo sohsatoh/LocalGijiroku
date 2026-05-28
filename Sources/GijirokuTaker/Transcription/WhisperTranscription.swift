@@ -237,7 +237,7 @@ public actor WhisperTranscription: TranscriptionEngine {
     /// immediately after the AudioCaptureEngine has been told to stop a
     /// source, so the inference loop doesn't keep re-transcribing the
     /// last 25 s of audio that's still sitting in the buffer.
-    public func clearSource(_ source: AudioSource) {
+    public func clearSource(_ source: AudioSource) async {
         buffers[source] = SourceBuffer(source: source)
         fputs("[WhisperTranscription] cleared \(source.rawValue) buffer\n", stderr)
     }

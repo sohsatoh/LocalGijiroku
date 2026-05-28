@@ -49,9 +49,23 @@ struct SettingsView: View {
 
             Divider()
 
-            Picker(L10n.string("settings.transcription_model"), selection: $settings.whisperModel) {
-                ForEach(WhisperModelChoice.allCases) { choice in
-                    Text(choice.displayName).tag(choice.rawValue)
+            Picker(L10n.string("settings.transcription_backend"), selection: Binding(
+                get: { settings.transcriptionBackend },
+                set: { settings.transcriptionBackend = $0 }
+            )) {
+                ForEach(TranscriptionBackend.allCases) { backend in
+                    Text(backend.displayName).tag(backend)
+                }
+            }
+            Text(loc: "settings.transcription_backend.caption")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if settings.transcriptionBackend == .whisperKit {
+                Picker(L10n.string("settings.transcription_model"), selection: $settings.whisperModel) {
+                    ForEach(WhisperModelChoice.allCases) { choice in
+                        Text(choice.displayName).tag(choice.rawValue)
+                    }
                 }
             }
             Picker(L10n.string("settings.language"), selection: $settings.whisperLanguage) {
@@ -269,8 +283,10 @@ struct SettingsView: View {
         Form {
             Toggle(L10n.string("settings.capture_system"), isOn: $settings.captureSystemAudio)
             Toggle(L10n.string("settings.capture_mic"), isOn: $settings.captureMicrophone)
-            Toggle(L10n.string("settings.vad"), isOn: $settings.vadEnabled)
-            Toggle(L10n.string("settings.diarization"), isOn: $settings.diarizationEnabled)
+            if settings.transcriptionBackend == .whisperKit {
+                Toggle(L10n.string("settings.vad"), isOn: $settings.vadEnabled)
+                Toggle(L10n.string("settings.diarization"), isOn: $settings.diarizationEnabled)
+            }
 
             HStack {
                 Picker(L10n.string("settings.input_device"), selection: $settings.preferredInputDeviceUID) {
@@ -289,12 +305,18 @@ struct SettingsView: View {
             Text(loc: "settings.bleed_dedup_caption")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(loc: "settings.vad_caption")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(loc: "settings.diarization_caption")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if settings.transcriptionBackend == .whisperKit {
+                Text(loc: "settings.vad_caption")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(loc: "settings.diarization_caption")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(loc: "settings.speech_analyzer_caption")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
