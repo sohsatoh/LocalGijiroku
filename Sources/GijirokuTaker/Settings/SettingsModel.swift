@@ -164,7 +164,7 @@ enum WhisperModelChoice: String, CaseIterable, Identifiable {
     case medium = "medium"
     case largeV3 = "large-v3"
     case largeV3Turbo = "large-v3-v20240930_626MB"
-    case largeV3Full = "large-v3-v20240930_949MB"
+    case largeV3Full = "large-v3_947MB"
 
     var id: String { rawValue }
 
