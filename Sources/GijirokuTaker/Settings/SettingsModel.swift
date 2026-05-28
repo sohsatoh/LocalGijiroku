@@ -28,6 +28,7 @@ final class SettingsModel: ObservableObject {
         static let transcriptFontSize = "transcriptFontSize"
         static let headingDetectionEnabled = "headingDetectionEnabled"
         static let agendaSuggestionEnabled = "agendaSuggestionEnabled"
+        static let pendingSpeakerCount = "pendingSpeakerCount"
     }
 
     @AppStorage(Keys.whisperModel) var whisperModel: String = WhisperModelChoice.largeV3Turbo.rawValue
@@ -95,6 +96,10 @@ final class SettingsModel: ObservableObject {
     /// so users can pick whichever assistant-side reasoning they value
     /// without paying for the other.
     @AppStorage(Keys.agendaSuggestionEnabled) var agendaSuggestionEnabled: Bool = true
+    /// Last-used speaker-count hint for diarization. 0 = automatic.
+    /// Persisting this matters because explicit speaker counts are one of the
+    /// strongest ways to stabilize Pyannote on short rolling windows.
+    @AppStorage(Keys.pendingSpeakerCount) var pendingSpeakerCount: Int = 0
 
     var userSummaryStyle: SummaryStyle {
         guard !userSummaryStyleJSON.isEmpty,
