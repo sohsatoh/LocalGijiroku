@@ -71,6 +71,7 @@
 "session.stats_format" = "%d segment(s) · %d event(s)";
 "session.duration_format" = "%@ · duration %dm %ds";
 "session.style_sheet_title" = "Template override for session \"%@\"";
+"session.title_edit_help" = "Edit title";
 
 /* === Settings tabs === */
 "settings.tab.general" = "General";

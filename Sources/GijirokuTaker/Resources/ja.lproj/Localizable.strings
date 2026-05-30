@@ -71,6 +71,7 @@
 "session.stats_format" = "%d セグメント · %d イベント";
 "session.duration_format" = "%@ · 録音時間 %d 分 %d 秒";
 "session.style_sheet_title" = "セッション「%@」のテンプレート上書き";
+"session.title_edit_help" = "タイトルを編集";
 
 /* === Settings tabs === */
 "settings.tab.general" = "一般";

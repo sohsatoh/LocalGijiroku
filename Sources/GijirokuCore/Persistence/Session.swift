@@ -16,6 +16,9 @@ public struct Session: Codable, Sendable, Identifiable {
     /// Per-session override for the LLM summary style. Highest priority in the
     /// resolution chain.
     public var summaryStyle: SummaryStyle?
+    /// True when the user has manually set the title; prevents automatic
+    /// title generation from overwriting it.
+    public var isTitleManuallyEdited: Bool
 
     public init(
         id: UUID = UUID(),
@@ -27,7 +30,8 @@ public struct Session: Codable, Sendable, Identifiable {
         summary: CumulativeSummary = CumulativeSummary(),
         events: [MeetingEvent] = [],
         headings: [TranscriptHeading] = [],
-        summaryStyle: SummaryStyle? = nil
+        summaryStyle: SummaryStyle? = nil,
+        isTitleManuallyEdited: Bool = false
     ) {
         self.id = id
         self.projectId = projectId
@@ -39,15 +43,17 @@ public struct Session: Codable, Sendable, Identifiable {
         self.events = events
         self.headings = headings
         self.summaryStyle = summaryStyle
+        self.isTitleManuallyEdited = isTitleManuallyEdited
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, projectId, title, startedAt, endedAt
         case transcript, summary, events, headings, summaryStyle
+        case isTitleManuallyEdited
     }
 
-    /// Custom decoder so sessions saved before `headings` existed still
-    /// load — the field reads as an empty array instead of throwing.
+    /// Custom decoder so sessions saved before `headings` / `isTitleManuallyEdited`
+    /// existed still load — missing fields default to safe values.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
@@ -60,5 +66,6 @@ public struct Session: Codable, Sendable, Identifiable {
         self.events = (try? c.decode([MeetingEvent].self, forKey: .events)) ?? []
         self.headings = (try? c.decode([TranscriptHeading].self, forKey: .headings)) ?? []
         self.summaryStyle = try? c.decode(SummaryStyle.self, forKey: .summaryStyle)
+        self.isTitleManuallyEdited = (try? c.decode(Bool.self, forKey: .isTitleManuallyEdited)) ?? false
     }
 }

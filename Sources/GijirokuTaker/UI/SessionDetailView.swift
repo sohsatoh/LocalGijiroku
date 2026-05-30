@@ -17,6 +17,9 @@ struct SessionDetailView: View {
     @State private var loadedSession: Session?
     @State private var lastReloadStamp: Date = .distantPast
     @State private var editingStyle: Session?
+    @State private var isEditingTitle = false
+    @State private var editingTitleText = ""
+    @FocusState private var titleFieldFocused: Bool
 
     init(session: Session) {
         self.sessionID = session.id
@@ -82,8 +85,33 @@ struct SessionDetailView: View {
     private func header(session: Session?) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(session?.title ?? "—")
-                    .font(.headline)
+                if isEditingTitle {
+                    TextField("", text: $editingTitleText)
+                        .font(.headline)
+                        .textFieldStyle(.plain)
+                        .focused($titleFieldFocused)
+                        .frame(minWidth: 80, maxWidth: 300)
+                        .onSubmit { commitTitleEdit() }
+                        .onExitCommand { isEditingTitle = false }
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(session?.title ?? "—")
+                            .font(.headline)
+                        if session != nil {
+                            Button {
+                                editingTitleText = session?.title ?? ""
+                                isEditingTitle = true
+                                titleFieldFocused = true
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(L10n.string("session.title_edit_help"))
+                        }
+                    }
+                }
                 Text(timeRangeString(for: session))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -144,6 +172,16 @@ struct SessionDetailView: View {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? markdown.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func commitTitleEdit() {
+        let trimmed = editingTitleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        isEditingTitle = false
+        guard var session = loadedSession, !trimmed.isEmpty else { return }
+        session.title = trimmed
+        session.isTitleManuallyEdited = true
+        library.updateSession(session)
+        loadedSession = session
     }
 
     /// Strips path separators and other characters that NSSavePanel will
