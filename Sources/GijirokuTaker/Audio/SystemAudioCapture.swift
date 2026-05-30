@@ -12,7 +12,7 @@ import OSLog
 // audio-only use. We add one with a very long `minimumFrameInterval` so the
 // video pipeline produces almost no work, then ignore those frames.
 @available(macOS 13.0, *)
-final class SystemAudioCapture: NSObject {
+final class SystemAudioCapture: NSObject, @unchecked Sendable {
     typealias Sink = @Sendable (AVAudioPCMBuffer) -> Void
 
     private let logger = Logger(subsystem: "com.gijirokutaker.app", category: "SystemAudioCapture")
@@ -24,9 +24,13 @@ final class SystemAudioCapture: NSObject {
     private var audioHandler: AudioOutputHandler?
     private var videoHandler: VideoOutputHandler?
     private var callbackCount = 0
+    // Set to true by stop() so that didStopWithError does not schedule a restart
+    // after an intentional tear-down.
+    private var intentionalStop = false
 
     func start(sink: @escaping Sink) async throws {
         guard stream == nil else { return }
+        intentionalStop = false
         self.sink = sink
         logger.info("Requesting SCShareableContent...")
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -74,6 +78,7 @@ final class SystemAudioCapture: NSObject {
     }
 
     func stop() {
+        intentionalStop = true
         guard let stream else { return }
         let log = logger
         Task { @Sendable [stream] in
@@ -96,6 +101,23 @@ final class SystemAudioCapture: NSObject {
 extension SystemAudioCapture: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
         logger.error("SCStream stopped with error: \(error.localizedDescription, privacy: .public)")
+        // If the stream had been delivering audio and was not intentionally stopped
+        // (e.g. a phone call activated VoiceProcessingIO and interrupted SCStream),
+        // clear state and restart.  We skip restart when callbackCount == 0 because
+        // that indicates a persistent failure such as a revoked permission.
+        guard !intentionalStop, callbackCount > 0, let savedSink = sink else { return }
+        self.stream = nil
+        self.audioHandler = nil
+        self.videoHandler = nil
+        callbackCount = 0
+        fputs("[SystemAudioCapture] unexpected stop — scheduling restart in 2 s\n", stderr)
+        Task { [weak self] in
+            guard let self, !self.intentionalStop else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !self.intentionalStop else { return }
+            fputs("[SystemAudioCapture] restarting SCStream\n", stderr)
+            try? await self.start(sink: savedSink)
+        }
     }
 }
 
