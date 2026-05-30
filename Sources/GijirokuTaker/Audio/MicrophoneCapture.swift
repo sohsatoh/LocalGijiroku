@@ -27,6 +27,27 @@ final class MicrophoneCapture {
         self.sink = sink
         self.preferredDeviceUID = preferredDeviceUID
 
+        try startEngine(preferredDeviceUID: preferredDeviceUID)
+        isRunning = true
+
+        // When a phone call starts the OS may reconfigure the audio hardware
+        // (VoiceProcessingIO takes over the input device).  Restart the engine so
+        // we keep receiving audio on the new configuration.
+        if configChangeObserver == nil {
+            configChangeObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: engine,
+                queue: nil
+            ) { [weak self] _ in
+                guard let self, self.isRunning else { return }
+                self.logger.info("AVAudioEngine configuration changed — restarting mic engine")
+                fputs("[MicrophoneCapture] configuration change, restarting\n", stderr)
+                self.restartEngineAfterConfigurationChange()
+            }
+        }
+    }
+
+    private func startEngine(preferredDeviceUID: String?) throws {
         if let uid = preferredDeviceUID, !uid.isEmpty {
             if let deviceID = Self.findDeviceID(uid: uid) {
                 try setInputDevice(deviceID)
@@ -57,25 +78,17 @@ final class MicrophoneCapture {
         }
         try engine.start()
         logger.info("Mic engine started, waiting for callbacks...")
-        isRunning = true
+    }
 
-        // When a phone call starts the OS may reconfigure the audio hardware
-        // (VoiceProcessingIO takes over the input device).  Restart the engine so
-        // we keep receiving audio on the new configuration.
-        configChangeObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: nil
-        ) { [weak self] _ in
-            guard let self, self.isRunning else { return }
-            self.logger.info("AVAudioEngine configuration changed — restarting mic engine")
-            fputs("[MicrophoneCapture] configuration change, restarting\n", stderr)
-            self.engine.inputNode.removeTap(onBus: 0)
-            let savedSink = self.sink
-            let savedUID = self.preferredDeviceUID
-            self.isRunning = false
-            self.callbackCount = 0
-            try? self.start(preferredDeviceUID: savedUID, sink: savedSink ?? { _ in })
+    private func restartEngineAfterConfigurationChange() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        callbackCount = 0
+
+        do {
+            try startEngine(preferredDeviceUID: preferredDeviceUID)
+        } catch {
+            logger.error("Mic engine restart failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
