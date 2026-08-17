@@ -61,7 +61,7 @@ The first time you select an MLX model, ~2–5 GB will download from HuggingFace
 
 | Backend | Setup | Notes |
 | --- | --- | --- |
-| **MLX** (default) | None — the model auto-downloads on first use. | Runs fully in-process. Curated `mlx-community/` models from Qwen3 1.7B up to Qwen2.5 14B, including Qwen3.5, Gemma 4 12B, and Ministral 3. |
+| **MLX** (default) | None — the model auto-downloads on first use. | Runs fully in-process. Curated `mlx-community/` models from Qwen3 1.7B up to Qwen2.5 14B, including Gemma 4 12B and Ministral 3. |
 | **Ollama** | `brew install ollama && ollama pull qwen2.5:7b` | Useful if you already have Ollama running. The Settings → LLM tab lists whatever `ollama list` returns. |
 
 ## Tests
