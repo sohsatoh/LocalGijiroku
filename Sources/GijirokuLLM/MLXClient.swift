@@ -171,13 +171,6 @@ public actor MLXClient: LLMClient {
             sessions[sessionKey] = session
             origin = .fresh
         }
-        // Suppress reasoning-model chain-of-thought (Qwen3.5 etc. emit
-        // `<think>` by default per their chat template). Templates that don't
-        // reference this kwarg ignore it; templates that do (e.g. Gemma 4)
-        // treat `false` the same as "unset" so existing behavior is
-        // unaffected. Set unconditionally rather than per-origin since the
-        // property lives on ChatSession itself, not the constructor.
-        session.additionalContext = ["enable_thinking": false]
         touchLRU(sessionKey)
         let recordedTurns = turnsPerSession[sessionKey] ?? 0
         fputs("[MLXClient] chat() session \(origin.label) turns=\(recordedTurns)/\(maxTurnsPerSession)\n", stderr)

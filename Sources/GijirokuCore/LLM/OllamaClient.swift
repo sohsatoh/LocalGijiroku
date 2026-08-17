@@ -30,13 +30,9 @@ public struct OllamaClient: LLMClient {
         // string `"json"` or a JSON Schema object (Ollama 0.5+). JSONEncoder
         // can't emit a mixed-type value here without a custom encoder.
         // `num_predict` is Ollama's name for the per-request token cap.
-        // `think: false` suppresses reasoning-model chain-of-thought (Qwen3.5
-        // etc. reason by default) — Ollama ignores the field for models that
-        // don't support thinking, so this is safe to send unconditionally.
         var bodyDict: [String: Any] = [
             "model": model,
             "stream": false,
-            "think": false,
             "options": [
                 "temperature": temperature,
                 "num_predict": maxTokens,

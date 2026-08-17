@@ -62,6 +62,10 @@ public enum MLXModelCatalog {
         // `<think>` blocks), instruction-tuned, multilingual, and small
         // enough that the first-Start download is reasonable.
         .init(id: "mlx-community/Qwen3-4B-Instruct-2507-4bit", displayName: "Qwen3 4B Instruct (2507) 4bit", backend: .mlx, sizeEstimate: "~2.5 GB"),
+        // Ministral 3 (2025-12 release). `model_type: mistral3`, ported to
+        // mlx-swift-lm as Mistral3Text.swift ("Port of mlx-lm/models/
+        // ministral3.py"). Non-reasoning instruct model.
+        .init(id: "mlx-community/Ministral-3-3B-Instruct-2512-4bit", displayName: "Ministral 3 3B Instruct 4bit", backend: .mlx, sizeEstimate: "~2.56 GB"),
         // Gemma 4 E2B IT 4bit. Verified working with mlx-swift-lm 3.31
         // (the architecture issue that excluded Gemma 3 doesn't reach
         // this loader). The "E2B" suffix is Google's Per-Layer-
@@ -78,7 +82,11 @@ public enum MLXModelCatalog {
         // (per safetensors index), not 4 GB despite the "4B effective"
         // label.
         .init(id: "mlx-community/gemma-4-e4b-it-4bit", displayName: "Gemma 4 E4B IT 4bit", backend: .mlx, sizeEstimate: "~4.9 GB"),
+        .init(id: "mlx-community/Ministral-3-8B-Instruct-2512-4bit", displayName: "Ministral 3 8B Instruct 4bit", backend: .mlx, sizeEstimate: "~5.21 GB"),
         .init(id: "mlx-community/gemma-2-9b-it-4bit", displayName: "Gemma 2 9B IT 4bit", backend: .mlx, sizeEstimate: "~5.4 GB"),
+        // Gemma 4 12B IT. `model_type: gemma4_unified`, same loader family as
+        // the E2B/E4B variants above.
+        .init(id: "mlx-community/gemma-4-12B-it-4bit", displayName: "Gemma 4 12B IT 4bit", backend: .mlx, sizeEstimate: "~6.28 GB"),
         // Large (Apple Silicon + 32 GB+ unified memory)
         .init(id: "mlx-community/Qwen2.5-14B-Instruct-4bit", displayName: "Qwen2.5 14B Instruct 4bit", backend: .mlx, sizeEstimate: "~8.2 GB"),
         // Reasoning models (Qwen3 base, no Instruct) — kept for users who
@@ -87,24 +95,6 @@ public enum MLXModelCatalog {
         // JSON closes on this app's structured-output workloads.
         .init(id: "mlx-community/Qwen3-4B-4bit", displayName: "Qwen3 4B 4bit (reasoning)", backend: .mlx, sizeEstimate: "~2.5 GB"),
         .init(id: "mlx-community/Qwen3-1.7B-4bit", displayName: "Qwen3 1.7B 4bit (reasoning)", backend: .mlx, sizeEstimate: "~1.1 GB"),
-        // Qwen3.5 (2025-11 release). `model_type: qwen3_5`, supported by
-        // mlx-swift-lm 3.31's LLMTypeRegistry (LLMModelFactory.swift). Its
-        // chat template reasons by default (`enable_thinking` defaults to
-        // true) — MLXClient sets `additionalContext: ["enable_thinking":
-        // false]` on every ChatSession so these don't burn the output budget
-        // on `<think>` blocks before the structured JSON closes.
-        .init(id: "mlx-community/Qwen3.5-2B-4bit", displayName: "Qwen3.5 2B 4bit", backend: .mlx, sizeEstimate: "~1.6 GB"),
-        .init(id: "mlx-community/Qwen3.5-4B-4bit", displayName: "Qwen3.5 4B 4bit", backend: .mlx, sizeEstimate: "~2.83 GB"),
-        .init(id: "mlx-community/Qwen3.5-9B-4bit", displayName: "Qwen3.5 9B 4bit", backend: .mlx, sizeEstimate: "~5.54 GB"),
-        // Gemma 4 12B IT. `model_type: gemma4_unified`, same loader family as
-        // the E2B/E4B variants above. Its chat template's `enable_thinking`
-        // defaults to false, so no thinking-suppression concern here.
-        .init(id: "mlx-community/gemma-4-12B-it-4bit", displayName: "Gemma 4 12B IT 4bit", backend: .mlx, sizeEstimate: "~6.28 GB"),
-        // Ministral 3 (2025-12 release). `model_type: mistral3`, ported to
-        // mlx-swift-lm as Mistral3Text.swift ("Port of mlx-lm/models/
-        // ministral3.py"). Non-reasoning instruct model.
-        .init(id: "mlx-community/Ministral-3-3B-Instruct-2512-4bit", displayName: "Ministral 3 3B Instruct 4bit", backend: .mlx, sizeEstimate: "~2.56 GB"),
-        .init(id: "mlx-community/Ministral-3-8B-Instruct-2512-4bit", displayName: "Ministral 3 8B Instruct 4bit", backend: .mlx, sizeEstimate: "~5.21 GB"),
         // NOTE: Gemma 3 family (`mlx-community/gemma-3-*`) is intentionally
         // excluded — current mlx-swift-lm misinterprets its grouped-query
         // attention layout and ensureLoaded fails with a v_proj shape
@@ -122,6 +112,17 @@ public enum MLXModelCatalog {
         // breaking this app's on-device-only guarantee. Revisit if
         // mlx-swift-lm adds `deepseek_v4` support and/or a local GGUF
         // distribution appears.
+        // NOTE: Qwen3.5 (`mlx-community/Qwen3.5-*-4bit`) is intentionally
+        // excluded despite having a registered `model_type: qwen3_5`. The
+        // Ollama sibling tag (`qwen3.5:4b`, same base weights) reproducibly
+        // (2 runs, temperature 0) returned a `regenerate()` summary response
+        // missing its final closing `}` on this app's real system prompt —
+        // `qwen2.5:7b` succeeds on the identical pipeline. Since MLX also has
+        // no grammar-constrained decoding (see LLMResponseFormat.jsonSchema
+        // doc comment), there's no reason to expect the MLX build behaves
+        // differently. Revisit once this model's JSON-closing reliability
+        // improves or this app gains a repair path for a single missing
+        // trailing brace.
     ]
 }
 
@@ -144,16 +145,13 @@ public extension ModelInfo {
         case "mlx-community/gemma-2-2b-it-4bit",
              "mlx-community/Llama-3.2-3B-Instruct-4bit",
              "mlx-community/Qwen2.5-3B-Instruct-4bit",
-             "mlx-community/Qwen3.5-2B-4bit",
-             "mlx-community/Qwen3.5-4B-4bit",
              "mlx-community/Ministral-3-3B-Instruct-2512-4bit":
             return .lightweight
         case "mlx-community/Qwen3-4B-Instruct-2507-4bit":
             // Recommended default — non-reasoning Qwen3, ~2.5 GB, robust
             // multilingual instruction following on small Apple Silicon.
             return .default
-        case "mlx-community/Qwen2.5-7B-Instruct-4bit",
-             "mlx-community/Qwen3.5-9B-4bit":
+        case "mlx-community/Qwen2.5-7B-Instruct-4bit":
             // Heavier alternative with very strong Japanese / English.
             return .multilingual
         case "mlx-community/gemma-2-9b-it-4bit",
@@ -319,22 +317,22 @@ public enum OllamaModelCatalog {
         .init(id: "gemma2:2b", displayName: "Gemma 2 2B Instruct", backend: .ollama, sizeEstimate: "~1.6 GB"),
         .init(id: "llama3.2:3b", displayName: "Llama 3.2 3B Instruct", backend: .ollama, sizeEstimate: "~2.0 GB"),
         .init(id: "qwen2.5:3b", displayName: "Qwen2.5 3B Instruct", backend: .ollama, sizeEstimate: "~2.0 GB"),
-        // Qwen3.5 (2025-11). Reasons by default — OllamaClient sends
-        // `think: false` on every request so these don't burn the output
-        // budget on chain-of-thought before the structured JSON closes.
-        .init(id: "qwen3.5:2b", displayName: "Qwen3.5 2B", backend: .ollama, sizeEstimate: "~2.7 GB"),
-        .init(id: "qwen3.5:4b", displayName: "Qwen3.5 4B", backend: .ollama, sizeEstimate: "~3.4 GB"),
         .init(id: "ministral-3:3b", displayName: "Ministral 3 3B Instruct", backend: .ollama, sizeEstimate: "~3.0 GB"),
         .init(id: "qwen2.5:7b", displayName: "Qwen2.5 7B Instruct", backend: .ollama, sizeEstimate: "~4.7 GB"),
-        .init(id: "qwen3.5:9b", displayName: "Qwen3.5 9B", backend: .ollama, sizeEstimate: "~6.6 GB"),
-        .init(id: "ministral-3:8b", displayName: "Ministral 3 8B Instruct", backend: .ollama, sizeEstimate: "~6.0 GB"),
         .init(id: "gemma2:9b", displayName: "Gemma 2 9B Instruct", backend: .ollama, sizeEstimate: "~5.4 GB"),
+        .init(id: "ministral-3:8b", displayName: "Ministral 3 8B Instruct", backend: .ollama, sizeEstimate: "~6.0 GB"),
         .init(id: "gemma4:12b", displayName: "Gemma 4 12B IT", backend: .ollama, sizeEstimate: "~7.6 GB"),
         .init(id: "qwen2.5:14b", displayName: "Qwen2.5 14B Instruct", backend: .ollama, sizeEstimate: "~9.0 GB"),
         // NOTE: deepseek-v4-flash is intentionally excluded — see the
         // matching NOTE in MLXModelCatalog.recommended above. Its only
         // ollama.com tags (`cloud` / `0731-cloud` / `preview-cloud`) run on
         // Ollama's cloud, not locally.
+        // NOTE: qwen3.5 tags are intentionally excluded — see the matching
+        // NOTE in MLXModelCatalog.recommended above. `qwen3.5:4b`
+        // reproducibly failed this app's regenerate() summary call with a
+        // JSON response missing its final closing brace (tested with Ollama's
+        // "think" request field set to false, so this isn't just unsuppressed
+        // chain-of-thought bleeding into the output).
     ]
 }
 
