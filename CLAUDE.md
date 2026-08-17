@@ -36,7 +36,7 @@ xcodebuild -downloadComponent MetalToolchain   # ~688 MB, needed for MLX
 bash scripts/make-icon.sh
 
 # Launch what you just built
-open build/GijirokuTaker.app
+open build/LocalGijiroku.app
 
 # CLI E2E runner — useful to test the audio→transcript→LLM pipeline
 # without the GUI / permission prompts.

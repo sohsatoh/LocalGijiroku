@@ -61,7 +61,7 @@ MLX モデルを初めて選んだときは ~2〜5 GB が HuggingFace から `~/
 
 | バックエンド | セットアップ | 備考 |
 | --- | --- | --- |
-| **MLX** (デフォルト) | 不要 — 初回利用時にモデルが自動ダウンロード。 | アプリプロセス内で完結。`mlx-community/` 配下から Qwen3 1.7B 〜 Qwen2.5 14B を厳選収録。 |
+| **MLX** (デフォルト) | 不要 — 初回利用時にモデルが自動ダウンロード。 | アプリプロセス内で完結。`mlx-community/` 配下から Qwen3 1.7B 〜 Qwen2.5 14B、Qwen3.5・Gemma 4 12B・Ministral 3 まで厳選収録。 |
 | **Ollama** | `brew install ollama && ollama pull qwen2.5:7b` | すでに Ollama を動かしている人向け。設定 → LLM タブには `ollama list` の結果がそのまま並びます。 |
 
 ## テスト
